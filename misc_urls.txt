@@ -1,0 +1,16 @@
+- Bitcoin github repository: https://github.com/bitcoin/bitcoin
+
+- Python Blockchain projects: https://libraries.io/search?keywords=blockchain&languages=Python
+
+- Blockchain Python tutorial 1: https://hackernoon.com/learn-blockchains-by-building-one-117428612f46 (code is at https://github.com/dvf/blockchain)
+
+- Blockchain Python tutorial 2: http://ecomunsing.com/build-your-own-blockchain
+
+- BGPStream: An open-source software framework for live and historical BGP data analysis: https://bgpstream.caida.org/
+
+- Python wrapper for BGPStream: https://bgpstream.caida.org/docs/install/pybgpstream
+
+- RPKI: https://www.noction.com/blog/bgp_security_rpki_overview
+
+- BGPSec: https://www.noction.com/blog/bgpsec_protocol
+
