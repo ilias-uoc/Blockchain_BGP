@@ -176,6 +176,27 @@ class Blockchain(object):
                 print("Could not contact node {}. Moving on...".format(node))
                 continue
 
+    def broadcast_transaction(self, transaction):
+        """
+        Broadcast a newly created transaction to the rest of the network
+
+        :param transaction: : <dict> Transaction
+        :return: nothing
+        """
+
+        neighbors = self.nodes
+        transaction_data = json.dumps(transaction)
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        for node in neighbors:
+            try:
+                response = requests.post('{}/transactions/incoming'.format(node), data=transaction_data, headers=headers)
+            except:
+                print("Could not contact node {}. Moving on...".format(node))
+                continue
+
     def resolve_conflicts(self):
         """
         This is our Consensus Algorithm, it resolves conflicts
@@ -271,6 +292,24 @@ def receive_incoming_block():
 
     if values['index'] > blockchain.last_block['index']:
         blockchain.check_before_mining = True
+        # someone else has already mined our broadcast transactions, reset
+        blockchain.current_transactions = []
+
+    return jsonify(response), 200
+
+@app.route('/transactions/incoming', methods=['POST'])
+def receive_incoming_transaction():
+    values = request.get_json()
+
+    # Check that the required fields are in the posted data
+    required = ['sender', 'recipient', 'amount']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    # Create a new transaction
+    index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'])
+
+    response = {'message': 'incoming transaction received'}
 
     return jsonify(response), 200
 
@@ -285,6 +324,13 @@ def new_transaction():
 
     # Create a new transaction
     index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'])
+
+    # Broadcast it to the rest of the network (to be mined later)
+    blockchain.broadcast_transaction({
+        'sender': values['sender'],
+        'recipient': values['recipient'],
+        'amount': values['amount']
+    })
 
     response = {'message': 'Transaction will be added to Block {}'.format(index)}
 
