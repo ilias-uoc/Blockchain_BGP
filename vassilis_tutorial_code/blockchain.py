@@ -58,11 +58,12 @@ class Blockchain(object):
         :return: <int> The index of the Block that will hold this transaction
         """
 
-        self.current_transactions.append({
+        transaction = {
             'sender': sender,
             'recipient': recipient,
             'amount': amount
-        })
+        }
+        self.current_transactions.append(transaction)
 
         return self.last_block['index'] + 1
 
@@ -102,7 +103,7 @@ class Blockchain(object):
     @staticmethod
     def valid_proof(last_proof, proof):
         """
-        Validates the Proof: Does hash(last_proof, proof, contain 4 leading zeroes
+        Validates the Proof: Does hash(last_proof, proof) contain 4 leading zeroes?
 
         :param last_proof: <int> previous Proof
         :param proof: <int> current Proof
@@ -235,14 +236,17 @@ class Blockchain(object):
 
         return False
 
+
 # Instantiate our Node
 app = Flask(__name__)
 
 # Generate a globally unique address for this node
 node_identifier = str(uuid4()).replace('-', '')
 
-# Instantiate the new Blockchain
+
+    # Instantiate the new Blockchain
 blockchain = Blockchain()
+
 
 @app.route('/mine', methods=['GET'])
 def mine():
@@ -256,28 +260,25 @@ def mine():
     last_proof = last_block['proof']
     proof = blockchain.proof_of_work(last_proof)
 
-    # Receive reward for finding the proof
-    # Sender is symbolically "0" to signify that this node has minded a new coin
-    blockchain.new_transaction(
-        sender="0",
-        recipient=node_identifier,
-        amount=1
-    )
+    response = "No transactions yet"
 
-    # Forge the new block and add it to the chain
-    previous_hash = blockchain.hash(last_block)
-    block = blockchain.new_block(proof, previous_hash)
-    blockchain.broadcast_block(block)
+    if len(blockchain.current_transactions) > 0:
+        blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1)  # reward the miner with 1 coin.
 
-    response = {
-        'message': "New Block Forged",
-        'index': block['index'],
-        'transactions': block['transactions'],
-        'proof': block['proof'],
-        'previous_hash': block['previous_hash']
-    }
+        # Forge the new Block by adding it to the chain
+        previous_hash = blockchain.hash(last_block)
+        block = blockchain.new_block(proof, previous_hash)
+        blockchain.broadcast_block(block)
 
+        response = {
+            'message': "New Block Forged",
+            'index': block['index'],
+            'transactions': block['transactions'],
+            'proof': block['proof'],
+            'previous_hash': block['previous_hash']
+        }
     return jsonify(response), 200
+
 
 @app.route('/blocks/incoming', methods=['POST'])
 def receive_incoming_block():
@@ -297,6 +298,7 @@ def receive_incoming_block():
 
     return jsonify(response), 200
 
+'''
 @app.route('/transactions/incoming', methods=['POST'])
 def receive_incoming_transaction():
     values = request.get_json()
@@ -312,6 +314,7 @@ def receive_incoming_transaction():
     response = {'message': 'incoming transaction received'}
 
     return jsonify(response), 200
+'''
 
 @app.route('/transactions/new', methods=['POST'])
 def new_transaction():
@@ -336,6 +339,7 @@ def new_transaction():
 
     return jsonify(response), 201
 
+
 @app.route('/chain', methods=['GET'])
 def full_chain():
     response = {
@@ -345,6 +349,7 @@ def full_chain():
 
     return jsonify(response), 200
 
+
 @app.route('/nodes/list', methods=['GET'])
 def list_nodes():
     response = {
@@ -353,6 +358,7 @@ def list_nodes():
     }
 
     return jsonify(response), 200
+
 
 @app.route('/nodes/register', methods=['POST'])
 def register_nodes():
@@ -372,6 +378,7 @@ def register_nodes():
 
     return jsonify(response), 201
 
+
 @app.route('/nodes/resolve', methods=['GET'])
 def consensus():
     replaced = blockchain.resolve_conflicts()
@@ -388,6 +395,7 @@ def consensus():
         }
 
     return jsonify(response), 200
+
 
 if __name__ == '__main__':
     parser = ArgumentParser()
