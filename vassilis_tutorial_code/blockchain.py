@@ -17,7 +17,7 @@ class Blockchain(object):
 
     def __init__(self):
         self.chain = []
-        self.current_transactions = []
+        self.current_transactions = {}
         self.nodes = set()
         self.check_before_mining = False
 
@@ -36,34 +36,38 @@ class Blockchain(object):
         block = {
             'index': len(self.chain) + 1,
             'timestamp': time(),
-            'transactions': self.current_transactions,
+            'transactions': [tran for tran_list in self.current_transactions.values() for tran in tran_list],
             'proof': proof,
             'previous_hash': previous_hash or self.hash(self.chain[-1])
         }
 
         # Reset the current list of transactions
-        self.current_transactions = []
+        self.current_transactions = {}
 
         self.chain.append(block)
 
         return block
 
-    def new_transaction(self, sender, recipient, amount):
+    def new_transaction(self, sender, recipient, amount, timestamp):
         """
         Create a new transaction to go into the next mined block
 
         :param sender: <str> Address of the sender
         :param recipient:  <str> Address of the recipient
         :param amount: <int> Amount
+        :param timestamp: <float> Timestamp
         :return: <int> The index of the Block that will hold this transaction
         """
 
         transaction = {
             'sender': sender,
             'recipient': recipient,
-            'amount': amount
+            'amount': amount,
+            'timestamp': timestamp
         }
-        self.current_transactions.append(transaction)
+        if timestamp not in self.current_transactions:
+            self.current_transactions[timestamp] = []
+        self.current_transactions[timestamp].append(transaction)
 
         return self.last_block['index'] + 1
 
@@ -263,7 +267,7 @@ def mine():
     response = "No transactions yet"
 
     if len(blockchain.current_transactions) > 0:
-        blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1)  # reward the miner with 1 coin.
+        blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1, timestamp=time())  # reward the miner with 1 coin.
 
         # Forge the new Block by adding it to the chain
         previous_hash = blockchain.hash(last_block)
@@ -293,28 +297,35 @@ def receive_incoming_block():
 
     if values['index'] > blockchain.last_block['index']:
         blockchain.check_before_mining = True
-        # someone else has already mined our broadcast transactions, reset
-        blockchain.current_transactions = []
+        #check which transactions are already mined and delete them based on timestamp
+        timestamps_for_removal = set()
+        for timestamp in blockchain.current_transactions:
+            if values['timestamp'] > timestamp:
+                timestamps_for_removal.add(timestamp)
+        for timestamp in timestamps_for_removal:
+            for tran in blockchain.current_transactions[timestamp]:
+                print("Transaction '{}' is already acknowledged, removed from current".format(tran))
+            del blockchain.current_transactions[timestamp]
 
     return jsonify(response), 200
 
-'''
+
 @app.route('/transactions/incoming', methods=['POST'])
 def receive_incoming_transaction():
     values = request.get_json()
 
     # Check that the required fields are in the posted data
-    required = ['sender', 'recipient', 'amount']
+    required = ['sender', 'recipient', 'amount', 'timestamp']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
     # Create a new transaction
-    index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'])
+    index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'], timestamp=values['timestamp'])
 
     response = {'message': 'incoming transaction received'}
 
     return jsonify(response), 200
-'''
+
 
 @app.route('/transactions/new', methods=['POST'])
 def new_transaction():
@@ -326,13 +337,15 @@ def new_transaction():
         return 'Missing values', 400
 
     # Create a new transaction
-    index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'])
+    tran_timestamp = time()
+    index = blockchain.new_transaction(sender=values['sender'], recipient=values['recipient'], amount=values['amount'], timestamp=tran_timestamp)
 
     # Broadcast it to the rest of the network (to be mined later)
     blockchain.broadcast_transaction({
         'sender': values['sender'],
         'recipient': values['recipient'],
-        'amount': values['amount']
+        'amount': values['amount'],
+        'timestamp': tran_timestamp
     })
 
     response = {'message': 'Transaction will be added to Block {}'.format(index)}
