@@ -41,6 +41,7 @@ class Blockchain(object):
             'previous_hash': previous_hash or self.hash(self.chain[-1])
         }
 
+
         # Reset the current list of transactions
         self.current_transactions = {}
 
@@ -59,12 +60,19 @@ class Blockchain(object):
         :return: <int> The index of the Block that will hold this transaction
         """
 
+        txid = '{}{}{}{}'.format(sender, recipient, amount, timestamp).encode()
+        txid_hash = hashlib.sha256(txid).hexdigest()
+
+        #to-do : inputs, outputs and confirmation of a transaction
+
         transaction = {
             'sender': sender,
             'recipient': recipient,
             'amount': amount,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'txid': txid_hash
         }
+
         if timestamp not in self.current_transactions:
             self.current_transactions[timestamp] = []
         self.current_transactions[timestamp].append(transaction)
@@ -248,7 +256,7 @@ app = Flask(__name__)
 node_identifier = str(uuid4()).replace('-', '')
 
 
-    # Instantiate the new Blockchain
+# Instantiate the new Blockchain
 blockchain = Blockchain()
 
 
@@ -259,15 +267,17 @@ def mine():
         replaced = blockchain.resolve_conflicts()
         blockchain.check_before_mining = False
 
-    # Run the Proof of Work algorithm to get the next Proof...
-    last_block = blockchain.last_block
-    last_proof = last_block['proof']
-    proof = blockchain.proof_of_work(last_proof)
-
     response = "No transactions yet"
 
     if len(blockchain.current_transactions) > 0:
-        blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1, timestamp=time())  # reward the miner with 1 coin.
+
+        # reward the miner with 1 coin.
+        blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1, timestamp=time())
+
+        # Run the Proof of Work algorithm to get the next Proof...
+        last_block = blockchain.last_block
+        last_proof = last_block['proof']
+        proof = blockchain.proof_of_work(last_proof)
 
         # Forge the new Block by adding it to the chain
         previous_hash = blockchain.hash(last_block)
@@ -406,6 +416,40 @@ def consensus():
             'message': 'Our chain is authoritative',
             'chain': blockchain.chain
         }
+
+    return jsonify(response), 200
+
+@app.route('/transactions/find_by_txid', methods=['POST'])
+def find_transaction_by_txid():
+    values = request.get_json()
+
+    required = ['txid']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    index = 1
+    found_it = 0
+    requested_tran = {}
+    # scan the chain
+    while index < len(blockchain.chain):
+        block = blockchain.chain[index]
+
+        for i in range(len(block['transactions'])):     # search all transactions inside a block
+            if values['txid'] == block['transactions'][i]['txid']:
+                found_it = 1
+                requested_tran = block['transactions'][i]
+                break
+
+        if(found_it):
+            break
+        index += 1
+
+    if(found_it):
+        response = {
+            'transaction': requested_tran
+        }
+    else:
+        response = "Couldn't find transaction with id: " + values['txid']
 
     return jsonify(response), 200
 
