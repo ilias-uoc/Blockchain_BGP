@@ -6,10 +6,15 @@ from Crypto import Random
 The global variables and structures all other modules should be able to see
 """
 
-state = {}  # state: {'prefix' : [ (AS1, lease duration(in months), transfer tag, txid), ... ,(ASN, lease duration(in months), transfer tag, txid) ] }
+state = {}  # state: {'prefix' : [ (AS1, lease duration(in months), transfer tag, txid), ... ,
+#                                  (ASN, lease duration(in months), transfer tag, txid) ] }
+
 txid_to_block = {}  # {'txid' : block index}
 
+my_assignments = set()  # a set of the txids of all the assign transactions a node has made
+
 ASN_nodes = []  # ASN nodes = [ [IP Address, Port, AS Number, ASN Public Key] ]
+
 pending_transactions = []
 
 as2pref, pref2as_pyt = get_as_prefs()

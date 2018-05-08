@@ -3,7 +3,8 @@ import requests
 from time import time
 from urllib.parse import urlparse
 from Block import Block
-from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
+from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt, my_ASN, my_IP, my_Port
+from config import my_assignments, node_key
 
 """
 The Blockchain module. Includes all the functionality for the blockchain
@@ -144,6 +145,7 @@ class Blockchain():
 
         # Replace our own chain if we have discovered a new valid chain longer than ours
         if new_chain:
+            print("RESOLVED?")
             self.chain = new_chain
             self.txid_to_block_update()
             self.state_update()
@@ -229,6 +231,9 @@ class Blockchain():
                 elif transaction_type == "Revoke":
                     response = requests.post('{}/transactions/revoke/incoming'.format(node[0]), data=transaction_data,
                                              headers=headers)
+                elif transaction_type == "Update":
+                    response = requests.post('{}/transactions/update/incoming'.format(node[0]), data=transaction_data,
+                                             headers=headers)
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
@@ -255,13 +260,14 @@ class Blockchain():
 
                     if transaction['type'] == "Assign":
                         self.update_assign(transaction)
+                        if transaction['txid'] in my_assignments:
+                            self.check_revoke(transaction)
 
                     elif transaction['type'] == "Revoke":
                         self.update_revoke(transaction)
 
                     elif transaction['type'] == "Update":
-                        # not ready yet! :)
-                        pass
+                        self.update_update(transaction)
 
     def update_assign(self, transaction):
         """
@@ -316,10 +322,61 @@ class Blockchain():
             found = 0
             for i in range(len(state[prefix])):
                 if as_source in state[prefix][i]:
+                    state[prefix].pop(i)
+                    state[prefix].append((as_source, ld, tt, last_assign))  # ?
                     found = 1
                     break
             if found == 0:
                 state[prefix].append((as_source, ld, tt, last_assign))  # the one that did the revocation
+
+    def update_update(self, transaction):
+        """
+        Updates the state for an Update transaction
+
+        :param transaction: <dict> An update transaction
+        """
+        assign_id = transaction['input'][1]
+        new_lease = transaction['input'][2]
+        assign_tran = self.find_by_txid(assign_id)
+
+        if assign_tran is not None:
+
+            tran = assign_tran['trans']
+            prefix = tran['input'][0]
+            as_dest_list = tran['input'][2]
+
+            for asn in as_dest_list:
+                for i in range(len(state[prefix])):
+                    if asn == state[prefix][i][0]:
+                        last_assign = state[prefix][i][-1]
+                        tt = state[prefix][i][-2]
+                        state[prefix].pop(i)  # remove the current entry
+                        state[prefix].append((asn, new_lease, tt, last_assign))  # update the entry with the new lease
+                        break
+
+    def check_revoke(self, transaction):
+        """
+        Checks occasionally if a revocation of a prefix needs to happen
+        It creates and broadcasts a new Revoke transaction for this prefix if true
+        """
+        from Transaction import RevokeTransaction
+
+        as_source = transaction['input'][1]
+        txid = transaction['txid']
+
+        new_revoke = RevokeTransaction(as_source, txid, time())
+
+        trans_hash = new_revoke.calculate_hash()
+        signature = node_key.sign(trans_hash.encode(), '')
+
+        new_revoke.sign(signature)
+
+        new_revoke_dict = new_revoke.return_transaction()
+
+        if new_revoke_dict is not None:
+            pending_transactions.append(new_revoke_dict)
+            self.broadcast_transaction(new_revoke)
+            my_assignments.remove(txid)
 
     def find_by_txid(self, txid):
         """

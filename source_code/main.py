@@ -1,14 +1,15 @@
 import hashlib
 import json
 import requests
-from time import time
+from requests_futures.sessions import FuturesSession
+from time import time, sleep
 from flask import Flask, jsonify, request
 from argparse import ArgumentParser
 from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
-from config import node_key, my_IP, my_Port, my_ASN
+from config import node_key, my_IP, my_Port, my_ASN, my_assignments
 from Blockchain import blockchain
-from Transaction import AssignTransaction, RevokeTransaction
+from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from Block import Block
 
 """
@@ -22,12 +23,15 @@ def broadcast_resolve_message():
     """
     Send a message to every other node in the blockchain network to check for any conflicts
     """
+    session = FuturesSession()
     neighbors = blockchain.nodes
     for node in neighbors:
         try:
-            response = requests.async.get('{}/resolve'.format(node[0]))
+            print("MY NEIGHBORS: {}".format(node[0]))
+            #sleep(10)
+            session.get('{}/resolve'.format(node[0]))
         except:
-            print("Could not contact node {}. Moving on.!.".format(node[0]))
+            print("Could not contact node {}. Moving on!".format(node[0]))  # not needed
             continue
 
 
@@ -85,11 +89,10 @@ def new_assign_transaction():
 
     tran_time = time()   # Transaction creation time
 
-    trans_str = '{}{}{}{}{}{}'.format(prefix, as_source, as_dest, leaseDuration, transferTag, last_assign, tran_time).encode()
-    trans_hash = hashlib.sha256(trans_str).hexdigest().encode()
-    signature = node_key.sign(trans_hash, '')
-
     new_trans = AssignTransaction(prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, tran_time, last_assign)
+
+    trans_hash = new_trans.calculate_hash()
+    signature = node_key.sign(trans_hash.encode(), '')
 
     new_trans.sign(signature)
 
@@ -100,6 +103,7 @@ def new_assign_transaction():
 
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
+        my_assignments.add(trans_hash)
 
     return 'New Assign transaction created. It was also broadcasted to the network', 200
 
@@ -157,11 +161,10 @@ def new_revoke_transaction():
 
     tran_time = time()   # Transaction creation time
 
-    trans_str = '{}{}{}'.format(as_source, assign_tran, tran_time).encode()
-    trans_hash = hashlib.sha256(trans_str).hexdigest().encode()
-    signature = node_key.sign(trans_hash, '')
-
     new_trans = RevokeTransaction(as_source, assign_tran, tran_time)
+
+    trans_hash = new_trans.calculate_hash()
+    signature = node_key.sign(trans_hash.encode(), '')
 
     new_trans.sign(signature)
 
@@ -208,13 +211,86 @@ def receive_incoming_revoke_transaction():
         return "Incoming Revoke transaction invalid. Transaction is not accepted", 500
 
 
+@app.route('/transactions/update/new', methods=['POST'])
+def new_update_transaction():
+    """
+    Create a new Update transaction. The AS node that makes the transaction signs it using its private key.
+    """
+    values = request.get_json()
+    # Check that required fields are in the posted data
+    required = ['as_source', 'assign_tran', 'new_lease']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    # Create a new transaction
+    as_source = values['as_source']
+    assign_tran = values['assign_tran']
+    new_lease = values['new_lease']
+
+    tran_time = time()   # Transaction creation time
+
+    new_trans = UpdateTransaction(as_source, assign_tran, tran_time, new_lease)
+
+    trans_hash = new_trans.calculate_hash()
+    signature = node_key.sign(trans_hash.encode(), '')
+
+    new_trans.sign(signature)
+
+    # Broadcast it to the rest of the network (to be mined later)
+
+    blockchain.broadcast_transaction(new_trans)
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None:
+        pending_transactions.append(new_trans_dict)  # to be mined later
+
+    return 'New Update transaction created. It was also broadcasted to the network', 200
+
+
+@app.route('/transactions/update/incoming', methods=['POST'])
+def receive_incoming_update_transaction():
+    """
+    Receive an incoming Revoke transaction sent by an AS.
+    """
+    values = request.get_json()
+
+    # Check that the required fields are in the posted data
+    required = ['as_source', 'assign_tran_id', 'time', 'signature', 'new_lease']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    as_source = values['as_source']
+    assign_tran_id = values['assign_tran_id']
+    signature = values['signature']
+    time = values['time']
+    new_lease = values['new_lease']
+
+    # Create a new transaction
+    new_trans = UpdateTransaction(as_source, assign_tran_id, time, new_lease)
+
+    new_trans.signature = signature
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None:
+        pending_transactions.append(new_trans_dict)  # to be mined later
+        return "Incoming Update transaction received", 200
+    else:
+        return "Incoming Update transaction invalid. Transaction is not accepted", 500
+
+
 def remove_pending_transactions():
     """
     Removes every pending transaction that is already in the chain
     """
-    for trans in pending_transactions:
-        if trans['trans']['txid'] in txid_to_block.keys():  # remove the transactions that are already in the chain
-            pending_transactions.remove(trans)
+    i = 0
+    while i < len(pending_transactions):
+        trans = pending_transactions[i]['trans']
+        if trans['txid'] in txid_to_block.keys():
+            pending_transactions.remove(pending_transactions[i])
+            i -= 1
+        i += 1
 
 
 @app.route('/mine', methods=['GET'])
@@ -222,7 +298,7 @@ def mine():
     """
     Mine a block to be added to the chain.
     """
-    blockchain.resolve_conflicts()
+    blockchain.resolve_conflicts()  # check the network before mining a new block
 
     if blockchain.check_before_mining:
         remove_pending_transactions()
@@ -230,6 +306,12 @@ def mine():
     if len(pending_transactions) > 0:
         last_block = blockchain.get_last_block()
         last_block_hash = last_block.hash
+
+        for i in range(len(pending_transactions)):
+            # update txid_to_block with all the txids that are about to be mined
+            tran = pending_transactions[i]['trans']
+            txid = tran['txid']
+            txid_to_block[txid] = len(blockchain.chain)
 
         block = Block(len(blockchain.chain), time(), pending_transactions, last_block_hash)
         print("Mining...")
@@ -242,7 +324,7 @@ def mine():
 
         blockchain.add_block(block)
 
-        # broadcast_resolve_message()
+        broadcast_resolve_message()  # let everyone know that the chain has changed
         blockchain.state_update()
         blockchain.check_before_mining = False
         remove_pending_transactions()
@@ -376,6 +458,7 @@ def print_for_debugging():
     print(txid_to_block)
     print(state)
     print(pending_transactions)
+    print(my_assignments)
     return "OK", 200
 
 

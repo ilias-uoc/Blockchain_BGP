@@ -17,6 +17,7 @@ class IPAllocationTransaction():
         self.txid = txid
         self.signature = None
         self.time = time
+        self.type = "IPAllocationSuperDuperClass"
         self.__input = []
         self.__output = []
 
@@ -36,7 +37,7 @@ class IPAllocationTransaction():
                 break
 
         if ASN_pkey is not None:
-            if ASN_pkey.verify(trans_hash, self.signature):
+            if ASN_pkey.verify(trans_hash.encode(), self.signature):
                 return True
             else:
                 return False
@@ -45,7 +46,7 @@ class IPAllocationTransaction():
 
     def calculate_hash(self):
         trans_str = '{}{}{}'.format(self.as_source, self.txid, self.time).encode()
-        trans_hash = hashlib.sha256(trans_str).hexdigest().encode()
+        trans_hash = hashlib.sha256(trans_str).hexdigest()
         return trans_hash
 
     def get_input(self):
@@ -76,6 +77,36 @@ class IPAllocationTransaction():
         """
         self.__output.append((output))
 
+    def validate_transaction(self):
+        """
+        Is overridden in all the sub classes.
+        """
+        pass
+
+    def return_transaction(self):
+        """
+        Returns a valid transaction to be added to a block in the blockchain
+
+        :return: <dict> A valid transaction, or None if the transaction is not valid.
+        """
+        if self.validate_transaction():
+
+            txid_hash = self.calculate_hash()
+
+            transaction = {
+                'trans': {
+                    'type': self.type,
+                    'input': self.get_input(),
+                    'output': self.get_output(),
+                    'timestamp': self.time,
+                    'txid': txid_hash
+                },
+                'signature': self.signature
+            }
+            return transaction
+        else:
+            return None
+
 
 class AssignTransaction(IPAllocationTransaction):
     def __init__(self, prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, time, txid):
@@ -105,7 +136,8 @@ class AssignTransaction(IPAllocationTransaction):
         :return: <bool> True if transaction is valid, False if not.
         """
         if self.validate_AS_assign():
-            input = [self.prefix, self.as_source, self.as_dest, self.source_lease, self.leaseDuration, self.transferTag, self.last_assign]
+            input = [self.prefix, self.as_source, self.as_dest, self.source_lease, self.leaseDuration, self.transferTag,
+                     self.last_assign]
             self.set_input(input)
 
             for AS in self.as_dest:
@@ -129,36 +161,6 @@ class AssignTransaction(IPAllocationTransaction):
         else:
             return False
 
-    def return_transaction(self):
-        """
-        Returns a valid transaction to be added to a block in the blockchain
-
-        :return: <dict> A valid transaction, or None if the transaction is not valid.
-        """
-        if self.validate_transaction():
-            txid = '{}{}'.format(self.get_input(),
-                                 self.get_output()).encode()  # hash should also include transaction's time
-            txid_hash = hashlib.sha256(txid).hexdigest()
-
-            if txid_hash not in txid_to_block.keys():  # double spending problem but this should not be the solution!
-                txid_to_block[txid_hash] = len(blockchain.chain)
-            else:
-                return None
-
-            transaction = {
-                'trans': {
-                    'type': "Assign",
-                    'input': self.get_input(),
-                    'output': self.get_output(),
-                    'timestamp': self.time,  # time(),
-                    'txid': txid_hash
-                },
-                'signature': self.signature
-            }
-            return transaction
-        else:
-            return None
-
     def check_state(self):
         """
         Checks whether the state of the prefix agrees with the transaction made or not
@@ -173,18 +175,6 @@ class AssignTransaction(IPAllocationTransaction):
                     tup[2] is True:
                 return True
         return False
-
-    def calculate_hash(self):
-        """
-        Calculates the hash of the Assign Transaction
-
-        :return: <bytes> The hash of the transaction
-        """
-        trans_str = '{}{}{}{}{}{}'.format(self.prefix, self.as_source, self.as_dest, self.leaseDuration,
-                                          self.transferTag, self.last_assign, self.time).encode()
-        trans_hash = hashlib.sha256(trans_str).hexdigest().encode()
-
-        return trans_hash
 
 
 class RevokeTransaction(IPAllocationTransaction):
@@ -208,7 +198,7 @@ class RevokeTransaction(IPAllocationTransaction):
             input = [self.as_source, self.assign_tran_id]
             self.set_input(input)
 
-            output = (prefix, self.as_source, new_leaseDuration, True)
+            output = (prefix, self.as_source, new_leaseDuration, True)  # the as source can always transfer the prefix
             self.set_output(output)
 
             return True
@@ -225,9 +215,10 @@ class RevokeTransaction(IPAllocationTransaction):
             lease = self.assign_tran['trans']['input'][4]
             timestamp = self.assign_tran['trans']['timestamp']
 
-            '''if self.time >= timestamp + 2629743.83 * lease:  # 1 month = 2629743.83 secs  -- JUST FOR TESTING! :)
-                return True'''
-        return True  # return False
+            if self.time >= timestamp + 2629743.83 * lease:  # 1 month = 2629743.83 secs
+                return True
+
+        return False
 
     def get_assign_tran(self):
         """
@@ -259,7 +250,7 @@ class RevokeTransaction(IPAllocationTransaction):
             as_dest = self.assign_tran['trans']['input'][2]
 
             if self.as_source == as_source:
-                # find if all ASN in the transaction are currently the owners of the prefix(from state)
+                # find if all ASes in the transaction are currently the owners of the prefix(from state)
                 for ASN in as_dest:
                     found = 0
                     for tuple in state[prefix]:
@@ -273,42 +264,104 @@ class RevokeTransaction(IPAllocationTransaction):
 
     def calculate_new_lease(self):
         """
-        Validates the transaction
+        Calculates the new lease for the AS that did the revocation
 
-        :return: <bool> True if transaction is valid, False if not.
+        :return: <int> The new lease period (in months)
         """
         old_lease = self.assign_tran['trans']['input'][4]
         my_prev_lease = self.assign_tran['trans']['input'][3]
-
         my_new_lease = my_prev_lease - old_lease
         return my_new_lease
 
-    def return_transaction(self):
-        """
-        Returns a valid transaction to be added to a block in the blockchain
 
-        :return: <dict> A valid transaction, or None if the transaction is not valid.
-        """
-        txid = '{}{}'.format(self.get_input(),
-                             self.get_output()).encode()  # hash should also include transaction's time
-        txid_hash = hashlib.sha256(txid).hexdigest()
+class UpdateTransaction(IPAllocationTransaction):
+    def __init__(self, as_source, txid, time, new_lease):
+        super().__init__(as_source, txid, time)
+        self.new_lease = new_lease
+        self.assign_tran_id = txid
+        self.assign_tran = self.get_assign_tran()
+        self.type = "Update"
 
-        if txid_hash not in txid_to_block.keys():  # double spending problem but this should not be the solution!
-            txid_to_block[txid_hash] = len(blockchain.chain)
+    def validate_transaction(self):
+        if self.verify_signature(self.calculate_hash()) and not self.lease_expired() and self.check_state():
+            prefix = self.assign_tran['trans']['input'][0]
+            as_dest = self.assign_tran['trans']['input'][2]
+            transfer_tag = self.assign_tran['trans']['input'][5]
+
+            input = [self.as_source, self.assign_tran_id, self.new_lease]
+            self.set_input(input)
+
+            for AS in as_dest:
+                output = (prefix, AS, self.new_lease, transfer_tag)
+                self.set_output(output)
+
+            return True
         else:
-            return None
+            return False
 
-        if self.validate_transaction():
-            transaction = {
-                'trans': {
-                    'type': "Revoke",
-                    'input': self.get_input(),
-                    'output': self.get_output(),
-                    'txid': txid_hash,
-                    'timestamp': self.time
-                },
-                'signature': self.signature
-            }
-            return transaction
-        else:
-            return None
+    def check_state(self):
+        """
+        Checks whether the source that made this transaction can be found in the Assign transaction
+        and whether the destination ASes found in this assign transaction own this prefix currently
+        (all the ASes that own the prefix right now should be in the state dictionary)
+
+        Also checks whether the new lease duration is less than the original that AS source has
+
+        :return: <bool> True if correct, False if not.
+        """
+        if self.assign_tran is not None:
+            prefix = self.assign_tran['trans']['input'][0]
+            as_source = self.assign_tran['trans']['input'][1]
+            as_dest = self.assign_tran['trans']['input'][2]
+            my_prev_lease = self.assign_tran['trans']['input'][3]
+            current_lease = 2000  # doesn't matter
+
+            if self.as_source == as_source:
+                # find if all ASes in the transaction are currently the owners of the prefix(from state)
+                for ASN in as_dest:
+                    found = 0
+                    for tuple in state[prefix]:
+                        if ASN in tuple:
+                            found = 1
+                            current_lease = tuple[1]
+                            break  # found one ASN keep searching for the rest
+                    if found == 0:
+                        return False  # an ASN was not found so the transaction should not be valid
+
+            if current_lease >= self.new_lease or self.new_lease > my_prev_lease:
+                return False
+
+            return True
+
+        return False
+
+    def lease_expired(self):
+        """
+        Checks if the lease has expired for the Assign transaction given
+
+        :return: <bool> True if the lease is expired, False if not.
+        """
+        if self.assign_tran is not None:
+            lease = self.assign_tran['trans']['input'][4]
+            timestamp = self.assign_tran['trans']['timestamp']
+
+            if self.time >= timestamp + 2629743.83 * lease:  # 1 month = 2629743.83 secs
+                return True
+
+        return False
+
+    def get_assign_tran(self):
+        """
+        Finds the assign transaction from the blockchain with the txid that was given
+        when creating this Update transaction
+
+        :return: <dict> The Assign transaction if found, None if not.
+        """
+        if self.assign_tran_id in txid_to_block.keys():
+            index = txid_to_block[self.assign_tran_id]
+            block = blockchain.chain[index]
+            for i in range(len(block.transactions)):
+                if block.transactions[i]['trans']['type'] == "Assign":
+                    if self.assign_tran_id == block.transactions[i]['trans']['txid']:
+                        return block.transactions[i]
+        return None
