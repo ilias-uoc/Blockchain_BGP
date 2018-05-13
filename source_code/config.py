@@ -19,6 +19,10 @@ pending_transactions = []
 
 as2pref, pref2as_pyt = get_as_prefs()
 
+update_sum = {}  # { 'AS Number' : sum }
+assign_sum = {}  # { 'AS Number' : sum }
+
+myIPPort = {}  # just for debugging
 
 def init_nodes():
     host = 'localhost'

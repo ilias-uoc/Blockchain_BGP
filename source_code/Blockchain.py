@@ -3,8 +3,9 @@ import requests
 from time import time
 from urllib.parse import urlparse
 from Block import Block
-from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt, my_ASN, my_IP, my_Port
+from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import my_assignments, node_key
+from config import myIPPort  # for debugging
 
 """
 The Blockchain module. Includes all the functionality for the blockchain
@@ -112,6 +113,48 @@ class Blockchain():
         else:
             return False
 
+    def resolve_after_mine(self, ip, port):
+        """
+        This is our Consensus Algorithm, it resolves conflicts
+        by replacing our chain with the longest one in the network.
+
+        :return: <bool> True if our chain was replaced, False if not
+        """
+        new_chain = None
+
+        # We are looking for chains longer than ours
+        max_length = len(self.chain)
+
+        # Get and verify the chains from all the nodes in the network
+        print("Resolving the conflicts between the chains in the network...")
+
+        print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> Contacting node: ", '{}/chain'.format("http://"+ip+":"+str(port)))
+
+        try:
+            response = requests.get('{}/chain'.format("http://"+ip+":"+str(port)))    # possible deadlock here
+        except:
+            print("Could not contact node {}. Moving on...".format("http://"+ip+":"+str(port)))
+            return False
+
+        if response.status_code == 200:
+            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> Ok got the response...")
+            length = response.json()['length']
+            chain_received = response.json()['chain']
+            chain = self.dict_to_block_chain(chain_received)
+            # Check if the length is longer and the chain is valid
+            if length > max_length and self.valid_chain(chain):
+                new_chain = chain
+
+        # Replace our own chain if we have discovered a new valid chain longer than ours
+        if new_chain:
+            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> The chain was replaced!")
+            self.chain = new_chain
+            self.txid_to_block_update()
+            self.state_update()
+            self.check_before_mining = True
+            return True
+        return False
+
     def resolve_conflicts(self):
         """
         This is our Consensus Algorithm, it resolves conflicts
@@ -126,15 +169,17 @@ class Blockchain():
         max_length = len(self.chain)
 
         # Get and verify the chains from all the nodes in the network
-        print("Resolving the conflicts between the chains in the network...")
+        print("NODE: "+ str(myIPPort['localhost']) + " Resolving the conflicts between the chains in the network...")
+
         for node in neighbors:
             try:
-                response = requests.get('{}/chain'.format(node[0]))
+                response = requests.get('{}/chain'.format(node[0]))    # possible deadlock here
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
 
             if response.status_code == 200:
+                print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve -> Got the resolve request")
                 length = response.json()['length']
                 chain_received = response.json()['chain']
                 chain = self.dict_to_block_chain(chain_received)
@@ -145,7 +190,7 @@ class Blockchain():
 
         # Replace our own chain if we have discovered a new valid chain longer than ours
         if new_chain:
-            print("RESOLVED?")
+            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve -> The chain was replaced!")
             self.chain = new_chain
             self.txid_to_block_update()
             self.state_update()
@@ -384,8 +429,13 @@ class Blockchain():
 
         :return: <dict> the requested transaction, None if not found
         """
-        index = txid_to_block[txid]
-        block = self.chain[index]
+        try:
+            index = txid_to_block[txid]
+            block = self.chain[index]
+        except KeyError:
+            print("Txid not found")
+            return None
+
         for i in range(len(block.transactions)):
             if txid == block.transactions[i]['trans']['txid']:
                 requested_tran = block.transactions[i]

@@ -12,6 +12,7 @@ class IPAllocationTransaction():
     """
     IPTransaction is the superclass of all the IP Address Allocation type of transactions
     """
+
     def __init__(self, as_source, txid, time):
         self.as_source = as_source
         self.txid = txid
@@ -283,6 +284,11 @@ class UpdateTransaction(IPAllocationTransaction):
         self.type = "Update"
 
     def validate_transaction(self):
+        """
+        Validates the transaction
+
+        :return: <bool> True if transaction is valid, False if not.
+        """
         if self.verify_signature(self.calculate_hash()) and not self.lease_expired() and self.check_state():
             prefix = self.assign_tran['trans']['input'][0]
             as_dest = self.assign_tran['trans']['input'][2]
@@ -313,7 +319,7 @@ class UpdateTransaction(IPAllocationTransaction):
             prefix = self.assign_tran['trans']['input'][0]
             as_source = self.assign_tran['trans']['input'][1]
             as_dest = self.assign_tran['trans']['input'][2]
-            my_prev_lease = self.assign_tran['trans']['input'][3]
+            as_source_source_lease = self.assign_tran['trans']['input'][3]
             current_lease = 2000  # doesn't matter
 
             if self.as_source == as_source:
@@ -328,11 +334,10 @@ class UpdateTransaction(IPAllocationTransaction):
                     if found == 0:
                         return False  # an ASN was not found so the transaction should not be valid
 
-            if current_lease >= self.new_lease or self.new_lease > my_prev_lease:
+            if current_lease >= self.new_lease or self.new_lease > as_source_source_lease \
+                    or not self.can_update(as_source_source_lease):
                 return False
-
             return True
-
         return False
 
     def lease_expired(self):
@@ -347,8 +352,35 @@ class UpdateTransaction(IPAllocationTransaction):
 
             if self.time >= timestamp + 2629743.83 * lease:  # 1 month = 2629743.83 secs
                 return True
-
         return False
+
+    def can_update(self, source_lease):
+        """
+        Goes through every block in the chain and finds all the update transactions
+        made by the same as source
+
+        Calculates the sum of these updates and checks if the sum is greater than
+        the original source lease duration or not
+
+        :return: <bool> False if the sum is greater, True if not.
+        """
+        all_update_lease_sum = 0
+        chain = blockchain.chain
+
+        for block in chain:
+            if block.index > 0:
+                for i in range(len(block.transactions)):
+                    transaction = block.transactions[i]['trans']
+                    if transaction['type'] == "Update":
+                        as_source = transaction['input'][0]
+                        lease = transaction['input'][2]
+                        if self.as_source == as_source:
+                            all_update_lease_sum += lease
+
+        if all_update_lease_sum + self.new_lease > source_lease:
+            return False
+        else:
+            return True
 
     def get_assign_tran(self):
         """
