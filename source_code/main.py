@@ -1,18 +1,18 @@
 import hashlib
 import json
 import requests
-from requests_futures.sessions import FuturesSession
-from time import time, sleep
-from random import seed, randrange
+from urllib.parse import urlparse
+from time import time
 from flask import Flask, jsonify, request
 from argparse import ArgumentParser
 from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
+from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
+from BGP_Transaction import BGP_Announce
 from Block import Block
-from config import myIPPort
 
 """
 The main functionality is here
@@ -21,79 +21,193 @@ The main functionality is here
 app = Flask(__name__)
 
 
-def broadcast_resolve_message():
+""" --------------------------------------Routes and functions for the network-------------------------------------- """
+
+
+def register_nodes():
     """
-    Send a message to every other node in the blockchain network to check for any conflicts
+    Registers the other nodes of the network.
+    The node running the script enters the BC network.
+    """
+    # first register the known ASes
+    for asn in ASN_nodes:
+        if my_IP in asn and my_Port == asn[1]:
+            continue
+        else:
+            ip = "http://" + asn[0] + ":" + str(asn[1])
+            blockchain.register_node(ip, asn[2])
+
+    # then find out about the rest of the network
+    neighbors = blockchain.nodes
+    network = []
+    for node in neighbors:
+        try:
+            response = requests.get('{}/neighbors'.format(node[0]))
+
+            if response.status_code == 200:
+                n = response.json()
+                for v in n.values():
+                    network.append(v)
+        except:
+            print("Could not contact node {}. Moving on...".format(node[0]))
+            continue
+
+    for node in network:
+        parsed_url = urlparse(node[0])
+        ip_port_list = parsed_url.netloc.split(":")
+        ip_addr = ip_port_list[0]
+        port = int(ip_port_list[1])
+
+        if my_IP == ip_addr and my_Port == port:
+            continue
+        blockchain.register_node(node[0], node[1])
+
+
+@app.route('/neighbors', methods=['GET'])
+def send_neighbors():
+    """
+    The node sends its neighbors to the requesting node.
+
+    :return: <json> This node's neighbors.
+    """
+    neighbors = blockchain.nodes
+    neighbors_dict = {}
+
+    for i, node in enumerate(neighbors):
+        neighbors_dict[i] = node
+
+    return jsonify(neighbors_dict), 200
+
+
+@app.route('/public_key/send', methods=['GET'])
+def send_public_key():
+    """
+    A node sends its public key upon request.
+
+    :return: <str> This node's public key.
+    """
+    public_key = node_key.publickey()
+    public_key_string = public_key.exportKey()
+    return public_key_string, 200
+
+
+def broadcast_public_key():
+    """
+    A node broadcasts its own Public Key, IP, Port and ASN to all the other nodes
+    in the blockchain network.
+
     """
     headers = {
         "Content-Type": "application/json"
     }
 
-    info = {
-        "IP": my_IP,
-        "PORT": my_Port
+    my_info = {
+        'public_key': node_key.publickey().exportKey().decode(),
+        'IPAddress': my_IP,
+        'Port': my_Port,
+        'ASN': my_ASN
     }
-    info_str = json.dumps(info)
+    my_data = json.dumps(my_info)
 
-    session = FuturesSession(max_workers=10)
+    print("Broadcasting my public key to the network...")
+
+    for node in blockchain.nodes:
+        try:
+            requests.post('{}/public_key/incoming'.format(node[0]), data=my_data, headers=headers)
+        except:
+            print("Could not contact node {}. Moving on...".format(node[0]))
+            continue
+
+
+def update_nodes_publicKey(externKey, IPAddress, port):
+    """
+    Updates the public key entry of a node.
+    """
+    for i in range(len(ASN_nodes)):
+        if ASN_nodes[i][0] == IPAddress and ASN_nodes[i][1] == port:
+            ASN_nodes[i][-1] = RSA.importKey(externKey)
+
+
+def request_public_key():
+    """
+    A node requests all public keys from the nodes in the blockchain network.
+    Updates the ASN Nodes list.
+    """
+    print("Requesting my neighbors' public keys...")
     neighbors = blockchain.nodes
-
     for node in neighbors:
-        session.post('{}/resolve/after_mine'.format(node[0]), data=info_str, headers=headers)
-        # to-do : Cancel queued requests ??
+        try:
+            response = requests.get('{}/public_key/send'.format(node[0]))
+            key = response.content
+            node_list = node[0].split("/")
+            ip_port = node_list[2].split(":")
+
+            node_IP = ip_port[0]
+            node_Port = int(ip_port[1])
+            update_nodes_publicKey(key, node_IP, node_Port)
+        except:
+            print("Could not contact node {}. Moving on...".format(node[0]))
+            continue
 
 
-@app.route('/resolve/after_mine', methods=['POST'])
-def resolve_after_mine():
+@app.route('/public_key/incoming', methods=['POST'])
+def receive_incoming_public_key():
+    """
+    A node receives a public key, the IP Address and Port from another node.
+    Updates the ASN Nodes list.
+    """
     values = request.get_json()
-
-    required = ['IP', 'PORT']
+    # Check that required fields are in the posted data
+    required = ['public_key', 'IPAddress', 'Port', 'ASN']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
-    IP = values['IP']
-    port = values['PORT']
+    ip = values['IPAddress']
+    port = values['Port']
+    asn = values['ASN']
+    public_key = values['public_key']
 
-    blockchain.resolve_after_mine(IP, port)   # possible deadlock here
-    return "OK", 200
+    found = 0
+    for AS in ASN_nodes:
+        if ip in AS and int(port) == AS[1]:
+            found = 1
+            break
+
+    if found == 0:
+        ASN_nodes.append([ip, int(port), asn, None])
+        addr = "http://" + ip + ":" + str(port)
+        blockchain.register_node(addr, asn)
+
+    update_nodes_publicKey(public_key, ip, port)
+    return "Received a public key.", 200
 
 
-@app.route('/resolve', methods=['GET'])
-def resolve():
+@app.route('/', methods=['GET'])
+def start():
     """
-    Every node resolves any conflicts with other nodes in the network
+    Start. This is the first request a node has to make
+    in order to enter the BC network.
     """
-    resolved = blockchain.resolve_conflicts()
-    if resolved:
-        response = "Resolved conflicts"
-    else:
-        response = "Chain is up to date"
+    # register nodes
+    register_nodes()
+    # broadcast your public key
+    broadcast_public_key()
+    # request all public keys in the network
+    request_public_key()
+    return "Successfully entered the BC network!", 200
 
-    return response, 200
+
+""" ---------------------------------------------------------------------------------------------------------------  """
 
 
-@app.route('/nodes/register', methods=['POST'])
-def register_nodes():
-    values = request.get_json()
-
-    nodes = values.get('nodes')
-    if nodes is None:
-        return "Error: Please supply a valid list of nodes", 400
-
-    for node in nodes:
-        blockchain.register_node(node[0], node[1])
-
-    response = {
-        'message': 'New nodes have been added',
-        'total_nodes': list(blockchain.nodes)
-    }
-    return jsonify(response), 201
+""" -------------------------------Routes and functions for all the transaction types------------------------------- """
 
 
 @app.route('/transactions/assign/new', methods=['POST'])
 def new_assign_transaction():
     """
-    Create a new transaction. The AS node that makes the transaction signs it using its private key.
+    Create a new transaction.
+    The AS node that makes the transaction signs it using its private key.
     """
     values = request.get_json()
     # Check that required fields are in the posted data
@@ -112,7 +226,8 @@ def new_assign_transaction():
 
     tran_time = time()   # Transaction creation time
 
-    new_trans = AssignTransaction(prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, tran_time, last_assign)
+    new_trans = AssignTransaction(prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, tran_time,
+                                  last_assign)
 
     trans_hash = new_trans.calculate_hash()
     signature = node_key.sign(trans_hash.encode(), '')
@@ -139,7 +254,8 @@ def receive_incoming_assign_transaction():
     values = request.get_json()
 
     # Check that the required fields are in the posted data
-    required = ['prefix', 'as_source', 'as_dest', 'source_lease', 'leaseDuration', 'transferTag', 'signature', 'time', 'last_assign']
+    required = ['prefix', 'as_source', 'as_dest', 'source_lease', 'leaseDuration', 'transferTag', 'signature', 'time',
+                'last_assign']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
@@ -154,7 +270,8 @@ def receive_incoming_assign_transaction():
     time = values['time']
 
     # Create a new transaction
-    new_trans = AssignTransaction(prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, time, last_assign)
+    new_trans = AssignTransaction(prefix, as_source, as_dest, source_lease, leaseDuration, transferTag, time,
+                                  last_assign)
 
     new_trans.signature = signature
 
@@ -170,7 +287,8 @@ def receive_incoming_assign_transaction():
 @app.route('/transactions/revoke/new', methods=['POST'])
 def new_revoke_transaction():
     """
-    Create a new Revoke transaction. The AS node that makes the transaction signs it using its private key.
+    Create a new Revoke transaction.
+    The AS node that makes the transaction signs it using its private key.
     """
     values = request.get_json()
     # Check that required fields are in the posted data
@@ -237,7 +355,8 @@ def receive_incoming_revoke_transaction():
 @app.route('/transactions/update/new', methods=['POST'])
 def new_update_transaction():
     """
-    Create a new Update transaction. The AS node that makes the transaction signs it using its private key.
+    Create a new Update transaction.
+    The AS node that makes the transaction signs it using its private key.
     """
     values = request.get_json()
     # Check that required fields are in the posted data
@@ -274,7 +393,7 @@ def new_update_transaction():
 @app.route('/transactions/update/incoming', methods=['POST'])
 def receive_incoming_update_transaction():
     """
-    Receive an incoming Revoke transaction sent by an AS.
+    Receive an incoming Update transaction sent by an AS.
     """
     values = request.get_json()
 
@@ -303,17 +422,75 @@ def receive_incoming_update_transaction():
         return "Incoming Update transaction invalid. Transaction is not accepted", 500
 
 
-def remove_pending_transactions():
+@app.route('/transactions/bgp_announce/new', methods=['POST'])
+def new_bgp_announce():
     """
-    Removes every pending transaction that is already in the chain
+    Create a new BGP Announce transaction.
+    The AS node that makes the transaction signs it using its private key.
     """
-    i = 0
-    while i < len(pending_transactions):
-        trans = pending_transactions[i]['trans']
-        if trans['txid'] in txid_to_block.keys():
-            pending_transactions.remove(pending_transactions[i])
-            i -= 1
-        i += 1
+    values = request.get_json()
+    # Check that required fields are in the posted data
+    required = ['prefix', 'as_source', 'as_source_list', 'as_dest_list']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    # Create a new transaction
+    prefix = values['prefix']
+    as_source = values['as_source']
+    as_source_list = values['as_source_list']
+    as_dest_list = values['as_dest_list']
+
+    tran_time = time()   # Transaction creation time
+
+    new_trans = BGP_Announce(prefix, as_source, as_source_list, as_dest_list, tran_time)
+
+    trans_hash = new_trans.calculate_hash()
+    signature = node_key.sign(trans_hash.encode(), '')
+
+    new_trans.sign(signature)
+
+    # Broadcast it to the rest of the network (to be mined later)
+    blockchain.broadcast_transaction(new_trans)
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+        pending_transactions.append(new_trans_dict)  # to be mined later
+
+    return 'New BGP Announce transaction created. It was also broadcasted to the network', 200
+
+
+@app.route('/transactions/bgp_announce/incoming', methods= ['POST'])
+def bgp_announce_incoming():
+    """
+    Receive an incoming BGP Announce transaction sent by an AS.
+    """
+    values = request.get_json()
+
+    # Check that the required fields are in the posted data
+    required = ['prefix', 'as_source', 'as_source_list', 'as_dest_list', 'signature', 'time']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    prefix = values['prefix']
+    as_source = values['as_source']
+    as_source_list = values['as_source_list']
+    as_dest_list = values['as_dest_list']
+    signature = values['signature']
+    time = values['time']
+
+    # Create a new transaction
+    new_trans = BGP_Announce(prefix, as_source, as_source_list, as_dest_list, time)
+
+    new_trans.sign(signature)
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+        pending_transactions.append(new_trans_dict)  # to be mined later
+        return "Incoming BGP Announce transaction received", 200
+    else:
+        return "Incoming BGP Announce transaction invalid. Transaction is not accepted", 500
 
 
 def check_lease():
@@ -323,6 +500,7 @@ def check_lease():
 
     (This is mostly for multiple assign/updates that have yet to be included in the blockchain)
     """
+    pt_mutex.acquire()
     current_update_lease = -2000
     i = 0
     while i < len(pending_transactions):
@@ -355,6 +533,7 @@ def check_lease():
                 pending_transactions.remove(pending_transactions[i])  # this transaction is invalid
                 i -= 1
         i += 1
+    pt_mutex.release()
 
 
 def check_assign(as_assign_source, original_lease, lease):
@@ -367,7 +546,7 @@ def check_assign(as_assign_source, original_lease, lease):
             return False
         else:
             assign_sum[as_assign_source] += lease
-    except:
+    except KeyError:
         assign_sum[as_assign_source] = lease
     return True
 
@@ -382,55 +561,43 @@ def check_update(as_assign_source, original_lease, lease):
             return False
         else:
             update_sum[as_assign_source] += lease
-    except:
+    except KeyError:
         update_sum[as_assign_source] = lease
     return True
 
 
-@app.route('/mine', methods=['GET'])
-def mine():
+def check_announce(as_source, prefix, as_source_list, as_dest_list):
     """
-    Mine a block to be added to the chain.
+    Checks whether a BGP Announce transaction was made more than once before it was withdrawn.
+
+    :param as_source: The advertising AS.
+    :param prefix: The prefix.
+    :param as_source_list: The ASes from which as_source learns the prefix.
+    :param as_dest_list: The ASes as_source advertises the prefix.
+
+    :return: <Bool> True if the transaction was made before. False otherwise.
     """
-    # possible deadlock here
-    blockchain.resolve_conflicts()  # check the network before mining a new block
+    bgpa_mutex.acquire()
+    txid = '{}{}{}{}'.format(as_source, prefix, as_source_list, as_dest_list).encode()
+    txid_hash = hashlib.sha256(txid).hexdigest()
+    try:
+        x = bgp_txid_announced[txid_hash]
+        bgpa_mutex.release()
+        return x
+    except KeyError:
+        bgp_txid_announced[txid_hash] = True
+        bgpa_mutex.release()
+        return False
 
-    if blockchain.check_before_mining:
-        print("Resolved my chain so I'm removing the mined pending transactions")
-        remove_pending_transactions()
 
-    if len(pending_transactions) > 0:
-        last_block = blockchain.get_last_block()
-        last_block_hash = last_block.hash
+def check_withdraw(as_source, prefix):
+    pass
 
-        check_lease()
 
-        for i in range(len(pending_transactions)):
-            # update txid_to_block with all the txids that are about to be mined
-            tran = pending_transactions[i]['trans']
-            txid = tran['txid']
-            txid_to_block[txid] = len(blockchain.chain)
+""" ---------------------------------------------------------------------------------------------------------------  """
 
-        block = Block(len(blockchain.chain), time(), pending_transactions, last_block_hash)
-        print("Mining...")
-        block.proof_of_work()
 
-        block_hash = block.calculate_hash()
-        signature = node_key.sign(block_hash.encode(), '')
-        block.sign(signature)
-        block.mined_by(my_ASN)
-
-        blockchain.add_block(block)
-
-        blockchain.state_update()
-        blockchain.check_before_mining = False
-        update_sum.clear()
-        assign_sum.clear()
-        remove_pending_transactions()
-
-        broadcast_resolve_message()  # let everyone know that the chain has changed
-
-    return "Mined one block", 200
+""" --------------------------------------Routes and functions for the mining--------------------------------------  """
 
 
 @app.route('/chain', methods=['GET'])
@@ -452,114 +619,116 @@ def full_chain():
     return jsonify(response), 200
 
 
-def update_nodes_publicKey(externKey, IPAddress, port):
+@app.route('/resolve', methods=['GET'])
+def resolve():
     """
-    Updates the public key entry of a node.
+    Every node resolves any conflicts with other nodes in the network.
     """
-    for i in range(len(ASN_nodes)):
-        if ASN_nodes[i][0] == IPAddress and ASN_nodes[i][1] == port:
-            ASN_nodes[i][-1] = RSA.importKey(externKey)
-
-
-@app.route('/public_key/send', methods=['GET'])
-def send_public_key():
-    """
-    A node sends its public key upon request
-
-    :return: <string> Node's public key
-    """
-    public_key = node_key.publickey()
-    public_key_string = public_key.exportKey()
-    return public_key_string, 200
-
-
-@app.route('/public_key/incoming', methods=['POST'])
-def receive_incoming_public_key():
-    """
-    A node receives a public key, the IP Address and Port from another node.
-    Updates the ASN Nodes list.
-    """
-    values = request.get_json()
-    # Check that required fields are in the posted data
-    required = ['public_key', 'IPAddress', 'Port']
-    if not all(k in values for k in required):
-        return 'Missing values', 400
-
-    update_nodes_publicKey(values['public_key'], values['IPAddress'], values['Port'])
-    return "Received public key", 200
-
-
-def request_public_key():
-    """
-    A node requests all public keys from the nodes in the blockchain network.
-    Updates the ASN Nodes list.
-    """
-    print("Requesting my neighbors' public keys...")
-    neighbors = blockchain.nodes
-    for node in neighbors:
-        try:
-            response = requests.get('{}/public_key/send'.format(node[0]))
-            key = response.content
-            node_list = node[0].split("/")
-            ip_port = node_list[2].split(":")
-
-            node_IP = ip_port[0]
-            node_Port = int(ip_port[1])
-            update_nodes_publicKey(key, node_IP, node_Port)
-        except:
-            print("Could not contact node {}. Moving on...".format(node[0]))
-            continue
-
-
-def broadcast_public_key():
-    """
-    A node broadcasts its own public key, IP and Port to all the other nodes in the blockchain network
-    """
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    my_info = {
-        'public_key': node_key.publickey().exportKey().decode(),
-        'IPAddress': my_IP,
-        'Port': my_Port
-    }
-    my_data = json.dumps(my_info)
-    print("Broadcasting my public key to the network...")
-    for node in blockchain.nodes:
-        try:
-            response = requests.post('{}/public_key/incoming'.format(node[0]), data=my_data, headers=headers)
-        except:
-            print("Could not contact node {}. Moving on...".format(node[0]))
-            continue
-
-
-@app.route('/command', methods=['GET'])
-def command():
-    """
-    Start
-    """
-    # register nodes
-    for asn in ASN_nodes:
-        if my_IP in asn:
-            if my_Port != asn[1]:
-                ip = "http://" + asn[0] + ":" + str(asn[1])
-                blockchain.register_node(ip, asn[2])
-
-    # broadcast your public key
-    broadcast_public_key()
-    # request all public keys in the network
-    request_public_key()
+    blockchain.resolve_conflicts()
     return "OK", 200
 
 
-@app.route('/print', methods=['GET'])
+def broadcast_resolve_message():
+    """
+    Send a message to every other node in the blockchain network to check for any conflicts
+    """
+    neighbors = blockchain.nodes
+    for node in neighbors:
+        try:
+            requests.get('{}/resolve'.format(node[0]))
+        except:
+            print("Could not contact node {}. Moving on...".format(node[0]))
+            continue
+
+
+def remove_pending_transactions():
+    """
+    Removes every pending transaction that is already in the chain.
+    """
+    pt_mutex.acquire()
+
+    i = 0
+    while i < len(pending_transactions):
+        trans = pending_transactions[i]['trans']
+        if trans['txid'] in txid_to_block.keys():
+            pending_transactions.remove(pending_transactions[i])
+            i -= 1
+        i += 1
+
+    pt_mutex.release()
+
+
+@app.route('/mine', methods=['GET'])
+def mine():
+    """
+    Mines a new block.
+    Adds a new block that include all the valid transactions to the chain if the mining was successful.
+    """
+    blockchain.resolve_conflicts()  # check the network before mining a new block
+
+    mutex.acquire()  # lock
+
+    if blockchain.check_before_mining:
+        remove_pending_transactions()
+
+    if len(pending_transactions) > 0:
+        last_block = blockchain.get_last_block()  # check critical region
+        last_block_hash = last_block.hash
+
+        check_lease()
+
+        for i in range(len(pending_transactions)):
+            # update txid_to_block with all the txids that are about to be mined
+            tran = pending_transactions[i]['trans']
+            txid = tran['txid']
+            txid_to_block[txid] = len(blockchain.chain)
+
+        block = Block(len(blockchain.chain), time(), pending_transactions, last_block_hash)
+
+        print("Mining...")
+        block.proof_of_work()
+
+        block_hash = block.calculate_hash()
+        signature = node_key.sign(block_hash.encode(), '')
+        block.sign(signature)
+        block.mined_by(my_ASN)
+
+        blockchain.add_block(block)
+
+        blockchain.state_update()
+        blockchain.AS_topo_update()
+        blockchain.check_before_mining = False
+        update_sum.clear()
+        assign_sum.clear()
+        remove_pending_transactions()
+
+    mutex.release()  # unlock
+    broadcast_resolve_message()  # let everyone know that the chain has changed
+    return "Mined one block", 200
+
+
+""" ---------------------------------------------------------------------------------------------------------------  """
+
+
+""" ---------------------------------------------------Misc/Debug--------------------------------------------------- """
+
+
+@app.route('/debug', methods=['GET'])
 def print_for_debugging():
     print(ASN_nodes)
     print(txid_to_block)
     print(state)
     print(pending_transactions)
+    print(blockchain.nodes)
+    print(bgp_txid_announced)
     return "OK", 200
+
+
+@app.route('/T', methods=['GET'])
+def print_T():
+    pref = '1.3.33.0/24'
+    print(AS_topo[pref].edges)
+    return 'OK', 200
 
 
 @app.route('/transactions/find_by_txid', methods=['POST'])
@@ -603,23 +772,19 @@ def find_transaction_by_txid():
                 return jsonify(response), 200
 
 
-def find_my_asn(myIP, myPort):
-    """
-    Returns the node's AS number
-    """
-    for asn in ASN_nodes:
-        if myIP == asn[0]:
-            if myPort == asn[1]:
-                return asn[2]
+""" ---------------------------------------------------------------------------------------------------------------- """
+
+
+""" ------------------------------------------------------Main------------------------------------------------------ """
 
 
 def update_my_publicKey(myIP, myPort):
     """
-    Updates the node's public key entry in the ASN list
+    Updates the node's public key entry in the ASN list.
     """
     for asn in ASN_nodes:
         if myIP in asn:
-            if myPort in asn:
+            if myPort == asn[1]:
                 asn[-1] = node_key.publickey()
                 break
 
@@ -627,16 +792,27 @@ def update_my_publicKey(myIP, myPort):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('-p', '--port', default=5000, type=int, help='port to listen on')
+    parser.add_argument('-a', '--asn', help='the as number of the node')
+    parser.add_argument('-i', '--ip', default='localhost', type=str, help='node\'s ip')
     args = parser.parse_args()
-    port = args.port
-    host = 'localhost'
-    my_IP = host
-    my_Port = port
 
-    update_my_publicKey(my_IP, my_Port)
+    my_Port = args.port
+    my_IP = args.ip
+    my_ASN = args.asn
 
-    my_ASN = find_my_asn(my_IP, my_Port)
+    found = 0
 
-    myIPPort[my_IP] = my_Port
+    for asn in ASN_nodes:
+        if my_IP in asn and my_Port == asn[1]:
+            found = 1
+            break
 
-    app.run(host=my_IP, port=my_Port)
+    if found==0:
+        ASN_nodes.append([my_IP, my_Port, my_ASN, node_key.publickey()])
+    else:
+        update_my_publicKey(my_IP, my_Port)
+
+    app.run(host=my_IP, port=my_Port, threaded=True)
+
+
+""" ---------------------------------------------------------------------------------------------------------------- """

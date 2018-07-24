@@ -1,10 +1,14 @@
 from parse_utils import get_as_prefs
 from Crypto.PublicKey import RSA
 from Crypto import Random
+import threading
+import csv
 
 """
 The global variables and structures all other modules should be able to see
 """
+
+ASN_nodes = []  # ASN nodes = [ [IP Address, Port, ASN, ASN Public Key] ]
 
 state = {}  # state: {'prefix' : [ (AS1, lease duration(in months), transfer tag, txid), ... ,
 #                                  (ASN, lease duration(in months), transfer tag, txid) ] }
@@ -13,8 +17,6 @@ txid_to_block = {}  # {'txid' : block index}
 
 my_assignments = set()  # a set of the txids of all the assign transactions a node has made
 
-ASN_nodes = []  # ASN nodes = [ [IP Address, Port, AS Number, ASN Public Key] ]
-
 pending_transactions = []
 
 as2pref, pref2as_pyt = get_as_prefs()
@@ -22,19 +24,27 @@ as2pref, pref2as_pyt = get_as_prefs()
 update_sum = {}  # { 'AS Number' : sum }
 assign_sum = {}  # { 'AS Number' : sum }
 
-myIPPort = {}  # just for debugging
+bgp_txid_announced = {}  # { 'txid' : True/False }
+
+AS_topo = {}  # { 'prefix' : Graph for this prefix }
+
+mutex = threading.Lock()
+pt_mutex = threading.Lock()
+bgpa_mutex = threading.Lock()
 
 def init_nodes():
-    host = 'localhost'
-    port = 5000
-    as_list = []
-    for asn in as2pref.keys():
-        as_list.append(asn)
-    as_list.sort()
-
-    for i in range(0, 5):
-        ASN_nodes.append([host, port + i, as_list[i], None])
-
+    """
+    Reads the known ASes from the file and updates the ASN_nodes list.
+    """
+    f = open('bgp_network.csv', 'r')
+    try:
+        reader = csv.reader(f)
+        for row in reader:
+            if reader.line_num != 1:
+                ip, port, asn = row
+                ASN_nodes.append([ip, int(port), asn, None])
+    finally:
+        f.close()
 
 def generate_keypair():
     """
@@ -46,8 +56,8 @@ def generate_keypair():
 
 
 node_key = generate_keypair()
+init_nodes()
+
 my_IP = ''
 my_Port = ''
 my_ASN = ''
-
-init_nodes()

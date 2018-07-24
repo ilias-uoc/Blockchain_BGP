@@ -1,5 +1,4 @@
 import hashlib
-from time import time
 from config import ASN_nodes, txid_to_block, state
 from Blockchain import blockchain
 
@@ -10,7 +9,7 @@ The IP Allocation Transaction module. Includes all the functionality for the IP 
 
 class IPAllocationTransaction():
     """
-    IPTransaction is the superclass of all the IP Address Allocation type of transactions
+    IPAllocationTransaction is the superclass of all the IP Address Allocation type of transactions
     """
 
     def __init__(self, as_source, txid, time):
@@ -23,84 +22,99 @@ class IPAllocationTransaction():
         self.__output = []
 
     def sign(self, signature):
+        """
+        Sets the signature of the transaction.
+
+        :param signature: <tuple> The signature that was calculated for this transaction.
+        """
         self.signature = signature
 
     def verify_signature(self, trans_hash):
         """
-        Verifies the origin of the transaction using the public key of the ASN that made this transaction
+        Verifies the origin of the transaction using the public key of the AS that made this transaction.
 
-        :return: <bool> True if signature is verified, False if not.
+        :param trans_hash: <str> The hash of the transaction that was used to sign it.
+        :return: <bool> True if the signature is verified, False otherwise.
+        """
+
+        AS_pkey = self.find_asn_public_key()
+
+        if AS_pkey is not None:
+            return AS_pkey.verify(trans_hash.encode(), self.signature)
+        else:
+            return False
+
+    def find_asn_public_key(self):
+        """
+        Finds the public key of the AS node that made this transaction.
+
+        :return: <RSA key> The public key of the node, or None if the key is not found.
         """
         ASN_pkey = None
         for asn in ASN_nodes:  # find ASN public key
             if self.as_source == asn[2]:
                 ASN_pkey = asn[-1]
                 break
-
-        if ASN_pkey is not None:
-            if ASN_pkey.verify(trans_hash.encode(), self.signature):
-                return True
-            else:
-                return False
-        else:
-            return False
+        return ASN_pkey
 
     def calculate_hash(self):
+        """
+        Calculates the hash of the transaction.
+
+        :return: <str> The SHA-256 hash of this transaction.
+        """
         trans_str = '{}{}{}'.format(self.as_source, self.txid, self.time).encode()
         trans_hash = hashlib.sha256(trans_str).hexdigest()
         return trans_hash
 
     def get_input(self):
         """
-        Getter method for input
+        Getter method for input.
 
-        :return: <list> The input of this transaction
+        :return: <list> The input of this transaction.
         """
         return self.__input
 
     def set_input(self, input):
         """
-        Setter method for input
+        Setter method for input.
         """
         self.__input.extend(input)
 
     def get_output(self):
         """
-        Getter method for output
+        Getter method for output.
 
-        :return: <list> The output of this transaction
+        :return: <list> The output of this transaction.
         """
         return self.__output
 
     def set_output(self, output):
         """
-        Setter method for output
+        Setter method for output.
         """
         self.__output.append((output))
 
     def validate_transaction(self):
         """
-        Is overridden in all the sub classes.
+        Should be overridden in all the subclasses.
         """
         pass
 
     def return_transaction(self):
         """
-        Returns a valid transaction to be added to a block in the blockchain
+        Returns a valid transaction to be added to a block in the blockchain.
 
         :return: <dict> A valid transaction, or None if the transaction is not valid.
         """
         if self.validate_transaction():
-
-            txid_hash = self.calculate_hash()
-
             transaction = {
                 'trans': {
                     'type': self.type,
                     'input': self.get_input(),
                     'output': self.get_output(),
                     'timestamp': self.time,
-                    'txid': txid_hash
+                    'txid': self.calculate_hash()
                 },
                 'signature': self.signature
             }
@@ -132,9 +146,9 @@ class AssignTransaction(IPAllocationTransaction):
 
     def validate_transaction(self):
         """
-        Validates the transaction
+        Validates the transaction.
 
-        :return: <bool> True if transaction is valid, False if not.
+        :return: <bool> True if transaction is valid, False otherwise.
         """
         if self.validate_AS_assign():
             input = [self.prefix, self.as_source, self.as_dest, self.source_lease, self.leaseDuration, self.transferTag,
@@ -155,7 +169,7 @@ class AssignTransaction(IPAllocationTransaction):
         last assignment, its lease duration is greater than the one given and it has the right to transfer the prefix
         further to other ASes.
 
-        :return: <bool> True if correct, False if not.
+        :return: <bool> True if correct, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and self.check_state():
             return True
@@ -164,9 +178,9 @@ class AssignTransaction(IPAllocationTransaction):
 
     def check_state(self):
         """
-        Checks whether the state of the prefix agrees with the transaction made or not
+        Checks whether the state of the prefix agrees with the transaction made or not.
 
-        :return: <bool> True if verified, False if not.
+        :return: <bool> True if verified, False otherwise.
         """
         for tup in state[self.prefix]:
             if self.as_source == tup[0] and \
@@ -187,9 +201,9 @@ class RevokeTransaction(IPAllocationTransaction):
 
     def validate_transaction(self):
         """
-        Validates the transaction
+        Validates the transaction.
 
-        :return: <bool> True if transaction is valid, False if not.
+        :return: <bool> True if transaction is valid, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and self.lease_expired() and self.check_state():
 
@@ -199,7 +213,7 @@ class RevokeTransaction(IPAllocationTransaction):
             input = [self.as_source, self.assign_tran_id]
             self.set_input(input)
 
-            output = (prefix, self.as_source, new_leaseDuration, True)  # the as source can always transfer the prefix
+            output = (prefix, self.as_source, new_leaseDuration, True)  # the AS source can always transfer the prefix
             self.set_output(output)
 
             return True
@@ -208,9 +222,9 @@ class RevokeTransaction(IPAllocationTransaction):
 
     def lease_expired(self):
         """
-        Checks if the lease has expired for the Assign transaction given
+        Checks if the lease has expired for the Assign transaction given.
 
-        :return: <bool> True if the lease is expired, False if not.
+        :return: <bool> True if the lease is expired, False otherwise.
         """
         if self.assign_tran is not None:
             lease = self.assign_tran['trans']['input'][4]
@@ -224,9 +238,9 @@ class RevokeTransaction(IPAllocationTransaction):
     def get_assign_tran(self):
         """
         Finds the assign transaction from the blockchain with the txid that was given
-        when creating this Revoke transaction
+        when creating this Revoke transaction.
 
-        :return: <dict> The Assign transaction if found, None if not.
+        :return: <dict> The Assign transaction if found, None otherwise.
         """
         if self.assign_tran_id in txid_to_block.keys():
             index = txid_to_block[self.assign_tran_id]
@@ -241,9 +255,9 @@ class RevokeTransaction(IPAllocationTransaction):
         """
         Checks whether the source that made this transaction can be found in the Assign transaction
         and whether the destination ASes found in this assign transaction own this prefix currently
-        (all the ASes that own the prefix right now should be in the state dictionary)
+        (all the ASes that own the prefix right now should be in the state dictionary).
 
-        :return: <bool> True if correct, False if not.
+        :return: <bool> True if correct, False otherwise.
         """
         if self.assign_tran is not None:
             prefix = self.assign_tran['trans']['input'][0]
@@ -265,9 +279,9 @@ class RevokeTransaction(IPAllocationTransaction):
 
     def calculate_new_lease(self):
         """
-        Calculates the new lease for the AS that did the revocation
+        Calculates the new lease for the AS that did the revocation.
 
-        :return: <int> The new lease period (in months)
+        :return: <int> The new lease period (in months).
         """
         old_lease = self.assign_tran['trans']['input'][4]
         my_prev_lease = self.assign_tran['trans']['input'][3]
@@ -285,9 +299,9 @@ class UpdateTransaction(IPAllocationTransaction):
 
     def validate_transaction(self):
         """
-        Validates the transaction
+        Validates the transaction.
 
-        :return: <bool> True if transaction is valid, False if not.
+        :return: <bool> True if transaction is valid, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and not self.lease_expired() and self.check_state():
             prefix = self.assign_tran['trans']['input'][0]
@@ -307,13 +321,13 @@ class UpdateTransaction(IPAllocationTransaction):
 
     def check_state(self):
         """
-        Checks whether the source that made this transaction can be found in the Assign transaction
-        and whether the destination ASes found in this assign transaction own this prefix currently
-        (all the ASes that own the prefix right now should be in the state dictionary)
+        Checks if the source that made this transaction can be found in the Assign transaction
+        and if the destination ASes found in this assign transaction own this prefix currently
+        (all the ASes that own the prefix right now should be in the state dictionary).
 
-        Also checks whether the new lease duration is less than the original that AS source has
+        Also checks if the new lease duration is less than the original that AS source has.
 
-        :return: <bool> True if correct, False if not.
+        :return: <bool> True if correct, False otherwise.
         """
         if self.assign_tran is not None:
             prefix = self.assign_tran['trans']['input'][0]
@@ -332,7 +346,7 @@ class UpdateTransaction(IPAllocationTransaction):
                             current_lease = tuple[1]
                             break  # found one ASN keep searching for the rest
                     if found == 0:
-                        return False  # an ASN was not found so the transaction should not be valid
+                        return False  # an AS was not found so the transaction is not valid
 
             if current_lease >= self.new_lease or self.new_lease > as_source_source_lease \
                     or not self.can_update(as_source_source_lease):
@@ -342,9 +356,9 @@ class UpdateTransaction(IPAllocationTransaction):
 
     def lease_expired(self):
         """
-        Checks if the lease has expired for the Assign transaction given
+        Checks if the lease has expired for the Assign transaction given.
 
-        :return: <bool> True if the lease is expired, False if not.
+        :return: <bool> True if the lease is expired, False otherwise.
         """
         if self.assign_tran is not None:
             lease = self.assign_tran['trans']['input'][4]
@@ -357,12 +371,12 @@ class UpdateTransaction(IPAllocationTransaction):
     def can_update(self, source_lease):
         """
         Goes through every block in the chain and finds all the update transactions
-        made by the same as source
+        made by the same as source.
 
-        Calculates the sum of these updates and checks if the sum is greater than
-        the original source lease duration or not
+        Calculates the sum of these updates and checks whether the sum is greater than
+        the original source lease duration or not.
 
-        :return: <bool> False if the sum is greater, True if not.
+        :return: <bool> False if the sum is greater, True otherwise.
         """
         all_update_lease_sum = 0
         chain = blockchain.chain
@@ -385,9 +399,9 @@ class UpdateTransaction(IPAllocationTransaction):
     def get_assign_tran(self):
         """
         Finds the assign transaction from the blockchain with the txid that was given
-        when creating this Update transaction
+        when creating this Update transaction.
 
-        :return: <dict> The Assign transaction if found, None if not.
+        :return: <dict> The Assign transaction if found, None otherwise.
         """
         if self.assign_tran_id in txid_to_block.keys():
             index = txid_to_block[self.assign_tran_id]

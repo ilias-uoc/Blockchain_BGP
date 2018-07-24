@@ -21,9 +21,7 @@ class Block():
     def proof_of_work(self):
         """
         Simple Proof of Work Algorithm:
-            - Find a number, nonce, such that the hash of the block contains 4 leading zeros
-
-        :param nonce: <int>
+            - Find a number, nonce, such that the hash of the block contains 4 leading zeros.
         """
         while not self.valid_proof(self.nonce):
             self.nonce += 1
@@ -34,7 +32,7 @@ class Block():
         Validates the Proof: Does the hash of the block contain 4 leading zeroes?
 
         :param nonce: <int>
-        :return: <bool> True if correct, False if not.
+        :return: <bool> True if correct, False otherwise.
         """
         block_hash = self.calculate_hash(nonce)
         if block_hash[:4] == "0000":
@@ -44,9 +42,9 @@ class Block():
 
     def calculate_hash(self, nonce=None):
         """
-        Create a SHA-256 hash of a Block
+        Create a SHA-256 hash of a Block.
 
-        :return: <str> The hash of the block
+        :return: <str> The hash of the block.
         """
         block_str = '{}{}{}{}'.format(self.timestamp, self.previousHash, json.dumps(self.transactions, sort_keys=True),
                                       nonce or self.nonce).encode()
@@ -55,12 +53,12 @@ class Block():
 
     def sign(self, signature):
         """
-        The miner signs the block
+        The miner signs the block.
         """
         self.signature = signature
 
     def mined_by(self, miner):
         """
-        Sets the miner of this block
+        Sets the miner of this block.
         """
         self.miner = miner

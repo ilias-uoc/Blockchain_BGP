@@ -1,11 +1,12 @@
 import json
 import requests
+import networkx as nx
 from time import time
 from urllib.parse import urlparse
 from Block import Block
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
-from config import my_assignments, node_key
-from config import myIPPort  # for debugging
+from config import my_assignments, node_key, AS_topo, mutex
+
 
 """
 The Blockchain module. Includes all the functionality for the blockchain
@@ -33,8 +34,10 @@ class Blockchain():
                 input.append((pref, AS))
                 output.append((pref, AS))
                 state[pref] = []
+                AS_topo[pref] = nx.DiGraph()
                 for asn in pref2as_pyt[pref]:
                     state[pref].append((asn, 1000, True, -1))
+                    AS_topo[pref].add_edge(asn, pref)
 
         txid_to_block[-1] = len(self.chain)
 
@@ -106,54 +109,9 @@ class Blockchain():
 
         if ASN_pkey is not None:
             block_hash = block.calculate_hash()
-            if ASN_pkey.verify(block_hash.encode(), block.signature):
-                return True
-            else:
-                return False
+            return ASN_pkey.verify(block_hash.encode(), block.signature)
         else:
             return False
-
-    def resolve_after_mine(self, ip, port):
-        """
-        This is our Consensus Algorithm, it resolves conflicts
-        by replacing our chain with the longest one in the network.
-
-        :return: <bool> True if our chain was replaced, False if not
-        """
-        new_chain = None
-
-        # We are looking for chains longer than ours
-        max_length = len(self.chain)
-
-        # Get and verify the chains from all the nodes in the network
-        print("Resolving the conflicts between the chains in the network...")
-
-        print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> Contacting node: ", '{}/chain'.format("http://"+ip+":"+str(port)))
-
-        try:
-            response = requests.get('{}/chain'.format("http://"+ip+":"+str(port)))    # possible deadlock here
-        except:
-            print("Could not contact node {}. Moving on...".format("http://"+ip+":"+str(port)))
-            return False
-
-        if response.status_code == 200:
-            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> Ok got the response...")
-            length = response.json()['length']
-            chain_received = response.json()['chain']
-            chain = self.dict_to_block_chain(chain_received)
-            # Check if the length is longer and the chain is valid
-            if length > max_length and self.valid_chain(chain):
-                new_chain = chain
-
-        # Replace our own chain if we have discovered a new valid chain longer than ours
-        if new_chain:
-            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve_after_mine -> The chain was replaced!")
-            self.chain = new_chain
-            self.txid_to_block_update()
-            self.state_update()
-            self.check_before_mining = True
-            return True
-        return False
 
     def resolve_conflicts(self):
         """
@@ -162,24 +120,22 @@ class Blockchain():
 
         :return: <bool> True if our chain was replaced, False if not
         """
-        neighbors = self.nodes
         new_chain = None
 
         # We are looking for chains longer than ours
+        mutex.acquire()
+        neighbors = self.nodes
         max_length = len(self.chain)
-
-        # Get and verify the chains from all the nodes in the network
-        print("NODE: "+ str(myIPPort['localhost']) + " Resolving the conflicts between the chains in the network...")
+        mutex.release()
 
         for node in neighbors:
             try:
-                response = requests.get('{}/chain'.format(node[0]))    # possible deadlock here
+                response = requests.get('{}/chain'.format(node[0]))  # possible deadlock here
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
 
             if response.status_code == 200:
-                print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve -> Got the resolve request")
                 length = response.json()['length']
                 chain_received = response.json()['chain']
                 chain = self.dict_to_block_chain(chain_received)
@@ -189,14 +145,17 @@ class Blockchain():
                     new_chain = chain
 
         # Replace our own chain if we have discovered a new valid chain longer than ours
-        if new_chain:
-            print("NODE: "+ str(myIPPort['localhost']) + " -- Resolve -> The chain was replaced!")
+        if new_chain is not None:
+            mutex.acquire()
             self.chain = new_chain
             self.txid_to_block_update()
             self.state_update()
+            self.AS_topo_update()
             self.check_before_mining = True
+            mutex.release()
             return True
-        return False
+        else:
+            return False
 
     def dict_to_block_chain(self, chain):
         """
@@ -228,8 +187,8 @@ class Blockchain():
 
     def register_node(self, address, ASN):
         """
-        Add a new node to the list of nodes
-        Update the ASN Nodes list
+        Add a new node to the list of nodes in the blockchain network.
+        Also updates the ASN Nodes list.
 
         :param address: <str> Address of node. E.g., 'http://192.168.0.5:5000'
         :param ASN: <str> AS number of the node
@@ -244,18 +203,18 @@ class Blockchain():
 
         found_it = 0
         for asn in ASN_nodes:
-            if ip_addr in asn:
-                if port != asn[1]:
-                    found_it = 1
+            if ip_addr in asn and port == asn[1]:
+                found_it = 1
+                break
 
-        if found_it == 0:
+        if not found_it:
             ASN_nodes.append([ip_addr, port, ASN, None])
 
     def broadcast_transaction(self, transaction):
         """
-        Broadcast a newly created transaction to the rest of the network
+        Broadcast a newly created transaction to the rest of the network.
 
-        :param transaction: : <Transaction> Transaction
+        :param transaction: : <Transaction>
         """
         transaction_dict = transaction.__dict__
         transaction_type = transaction_dict['type']
@@ -271,14 +230,17 @@ class Blockchain():
         for node in neighbors:
             try:
                 if transaction_type == "Assign":
-                    response = requests.post('{}/transactions/assign/incoming'.format(node[0]), data=transaction_data,
-                                             headers=headers)
+                    requests.post('{}/transactions/assign/incoming'.format(node[0]), data=transaction_data,
+                                  headers=headers)
                 elif transaction_type == "Revoke":
-                    response = requests.post('{}/transactions/revoke/incoming'.format(node[0]), data=transaction_data,
-                                             headers=headers)
+                    requests.post('{}/transactions/revoke/incoming'.format(node[0]), data=transaction_data,
+                                  headers=headers)
                 elif transaction_type == "Update":
-                    response = requests.post('{}/transactions/update/incoming'.format(node[0]), data=transaction_data,
-                                             headers=headers)
+                    requests.post('{}/transactions/update/incoming'.format(node[0]), data=transaction_data,
+                                  headers=headers)
+                elif transaction_type == "BGP Announce":
+                    requests.post('{}/transactions/bgp_announce/incoming'.format(node[0]),
+                                  data=transaction_data, headers=headers)
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
@@ -402,7 +364,7 @@ class Blockchain():
     def check_revoke(self, transaction):
         """
         Checks occasionally if a revocation of a prefix needs to happen
-        It creates and broadcasts a new Revoke transaction for this prefix if true
+        It creates and broadcasts a new Revoke transaction for this prefix if true.
         """
         from Transaction import RevokeTransaction
 
@@ -422,6 +384,38 @@ class Blockchain():
             pending_transactions.append(new_revoke_dict)
             self.broadcast_transaction(new_revoke)
             my_assignments.remove(txid)
+
+    def AS_topo_update(self):
+        """
+        Updates the topologies based on the BGP Announce/Withdraw transactions
+
+        """
+        for block in self.chain:  # go through every block from the beginning
+            if block.index > 0:
+                for i in range(len(block.transactions)):
+                    transaction = block.transactions[i]['trans']
+
+                    if transaction['type'] == "BGP Announce":
+                        self.update_bgp_announce(transaction)
+
+                    elif transaction['type'] == "BGP Withdraw":
+                        pass
+
+    def update_bgp_announce(self, transaction):
+        """
+        Updates the topology of a prefix given in an Announce transaction.
+
+        :param transaction: <dict> A BGP Announce transaction
+        """
+        prefix = transaction['input'][0]
+        sub_paths = transaction['output']
+        topo = AS_topo[prefix]
+
+        for path in sub_paths:
+            if path[1] == '0':
+                topo.add_edges_from([(path[2], prefix), (path[3], path[2])])  # don't add the 0 node in the graph
+            else:
+                topo.add_edges_from([(path[2], path[1]), (path[3], path[2])])
 
     def find_by_txid(self, txid):
         """
