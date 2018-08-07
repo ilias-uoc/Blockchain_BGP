@@ -28,9 +28,14 @@ bgp_txid_announced = {}  # { 'txid' : True/False }
 
 AS_topo = {}  # { 'prefix' : Graph for this prefix }
 
+assigned_prefixes = set()
+assign_txids = set()
+
 mutex = threading.Lock()
 pt_mutex = threading.Lock()
 bgpa_mutex = threading.Lock()
+topo_mutex = threading.Lock()
+
 
 def init_nodes():
     """
@@ -45,6 +50,7 @@ def init_nodes():
                 ASN_nodes.append([ip, int(port), asn, None])
     finally:
         f.close()
+
 
 def generate_keypair():
     """

@@ -25,7 +25,7 @@ try:
             for i in range(5):
                 args.pop()
 
-    sleep(2)
+    sleep(20)
 
     f.seek(0, 0)
 

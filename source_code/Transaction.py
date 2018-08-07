@@ -134,7 +134,7 @@ class AssignTransaction(IPAllocationTransaction):
         self.source_lease = source_lease
         self.type = "Assign"
 
-        if not isinstance(as_dest, list):
+        '''if not isinstance(as_dest, list):
             raise TypeError("AS destination must be set to a list")
 
         if not isinstance(as_source, str):
@@ -142,7 +142,7 @@ class AssignTransaction(IPAllocationTransaction):
 
         for i in as_dest:
             if not isinstance(i, str):
-                raise TypeError("AS destination list element must be set to a string")
+                raise TypeError("AS destination list element must be set to a string") ???????'''
 
     def validate_transaction(self):
         """
@@ -171,7 +171,7 @@ class AssignTransaction(IPAllocationTransaction):
 
         :return: <bool> True if correct, False otherwise.
         """
-        if self.verify_signature(self.calculate_hash()) and self.check_state():
+        if self.verify_signature(self.calculate_hash()) and self.check_state() and self.check_as():
             return True
         else:
             return False
@@ -190,6 +190,21 @@ class AssignTransaction(IPAllocationTransaction):
                     tup[2] is True:
                 return True
         return False
+
+    def check_as(self):
+        """
+        Checks if the destination ASes of an IP Assign transaction are in the blockchain network.
+        :return: <bool> True if the ASes are in the network, False otherwise.
+        """
+        ASes = []
+        for i in range(len(ASN_nodes)):
+            ASes.append(ASN_nodes[i][2])
+
+        for AS in self.as_dest:
+            if AS not in ASes:
+                return False
+
+        return True
 
 
 class RevokeTransaction(IPAllocationTransaction):

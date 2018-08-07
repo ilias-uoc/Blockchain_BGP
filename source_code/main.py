@@ -8,7 +8,7 @@ from argparse import ArgumentParser
 from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
-from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex
+from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from BGP_Transaction import BGP_Announce
@@ -234,6 +234,11 @@ def new_assign_transaction():
 
     new_trans.sign(signature)
 
+    test_str = '{}{}{}'.format(as_source, as_dest.sort(), last_assign).encode()
+    test_hash = hashlib.sha256(test_str).hexdigest()
+    if test_hash in assign_txids:
+        return 'Transaction was already made', 500  # don't include the same transaction multiple times in the chain
+
     # Broadcast it to the rest of the network (to be mined later)
     blockchain.broadcast_transaction(new_trans)
 
@@ -242,7 +247,8 @@ def new_assign_transaction():
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
         my_assignments.add(trans_hash)
-
+        assigned_prefixes.add(prefix)
+        assign_txids.add(test_hash)
     return 'New Assign transaction created. It was also broadcasted to the network', 200
 
 
@@ -279,6 +285,7 @@ def receive_incoming_assign_transaction():
 
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
+        assigned_prefixes.add(prefix)
         return "Incoming Assign transaction received", 200
     else:
         return "Incoming Assign transaction invalid. Transaction is not accepted", 500
@@ -430,19 +437,25 @@ def new_bgp_announce():
     """
     values = request.get_json()
     # Check that required fields are in the posted data
-    required = ['prefix', 'as_source', 'as_source_list', 'as_dest_list']
+    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list', 'project', 'collector',
+                'asn_peer']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
     # Create a new transaction
     prefix = values['prefix']
+    bgp_timestamp = values['bgp_timestamp']
     as_source = values['as_source']
     as_source_list = values['as_source_list']
     as_dest_list = values['as_dest_list']
+    project = values['project']
+    collector = values['collector']
+    asn_peer = values['asn_peer']
 
     tran_time = time()   # Transaction creation time
 
-    new_trans = BGP_Announce(prefix, as_source, as_source_list, as_dest_list, tran_time)
+    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, tran_time, project,
+                             collector, asn_peer)
 
     trans_hash = new_trans.calculate_hash()
     signature = node_key.sign(trans_hash.encode(), '')
@@ -454,13 +467,13 @@ def new_bgp_announce():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+    if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
 
     return 'New BGP Announce transaction created. It was also broadcasted to the network', 200
 
 
-@app.route('/transactions/bgp_announce/incoming', methods= ['POST'])
+@app.route('/transactions/bgp_announce/incoming', methods=['POST'])
 def bgp_announce_incoming():
     """
     Receive an incoming BGP Announce transaction sent by an AS.
@@ -468,25 +481,30 @@ def bgp_announce_incoming():
     values = request.get_json()
 
     # Check that the required fields are in the posted data
-    required = ['prefix', 'as_source', 'as_source_list', 'as_dest_list', 'signature', 'time']
+    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list', 'signature', 'time',
+                'project', 'collector', 'asn_peer']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
     prefix = values['prefix']
+    bgp_timestamp = values['bgp_timestamp']
     as_source = values['as_source']
     as_source_list = values['as_source_list']
     as_dest_list = values['as_dest_list']
     signature = values['signature']
     time = values['time']
+    project = values['project']
+    collector = values['collector']
+    asn_peer = values['asn_peer']
 
     # Create a new transaction
-    new_trans = BGP_Announce(prefix, as_source, as_source_list, as_dest_list, time)
-
+    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, time, project, collector,
+                             asn_peer)
     new_trans.sign(signature)
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+    if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming BGP Announce transaction received", 200
     else:
@@ -565,7 +583,8 @@ def check_update(as_assign_source, original_lease, lease):
         update_sum[as_assign_source] = lease
     return True
 
-
+# TODO: Below, a check that prevents the same BGP Announce transaction to be made multiple times in the same block.
+'''
 def check_announce(as_source, prefix, as_source_list, as_dest_list):
     """
     Checks whether a BGP Announce transaction was made more than once before it was withdrawn.
@@ -588,6 +607,7 @@ def check_announce(as_source, prefix, as_source_list, as_dest_list):
         bgp_txid_announced[txid_hash] = True
         bgpa_mutex.release()
         return False
+'''
 
 
 def check_withdraw(as_source, prefix):
@@ -658,6 +678,24 @@ def remove_pending_transactions():
     pt_mutex.release()
 
 
+def check_prefixes():
+    """
+    Checks if a prefix in a BGP Announce transaction has also been in an IP Assignment
+    and if so, it rejects the BGP Announce transaction.
+    """
+    pt_mutex.acquire()
+
+    i = 0
+    while i < len(pending_transactions):
+        trans = pending_transactions[i]['trans']
+        if trans['type'] == "BGP Announce" and trans['input'][0] in assigned_prefixes:
+            pending_transactions.remove(pending_transactions[i])
+            i -= 1
+        i += 1
+
+    pt_mutex.release()
+
+
 @app.route('/mine', methods=['GET'])
 def mine():
     """
@@ -665,6 +703,8 @@ def mine():
     Adds a new block that include all the valid transactions to the chain if the mining was successful.
     """
     blockchain.resolve_conflicts()  # check the network before mining a new block
+
+    check_prefixes()
 
     mutex.acquire()  # lock
 
@@ -696,10 +736,11 @@ def mine():
         blockchain.add_block(block)
 
         blockchain.state_update()
-        blockchain.AS_topo_update()
         blockchain.check_before_mining = False
         update_sum.clear()
         assign_sum.clear()
+        assigned_prefixes.clear()
+        assign_txids.clear()
         remove_pending_transactions()
 
     mutex.release()  # unlock
@@ -721,12 +762,13 @@ def print_for_debugging():
     print(pending_transactions)
     print(blockchain.nodes)
     print(bgp_txid_announced)
+    print(assigned_prefixes)
     return "OK", 200
 
 
 @app.route('/T', methods=['GET'])
 def print_T():
-    pref = '1.3.33.0/24'
+    pref = '139.91.0.0/16'
     print(AS_topo[pref].edges)
     return 'OK', 200
 
@@ -807,7 +849,7 @@ if __name__ == '__main__':
             found = 1
             break
 
-    if found==0:
+    if found == 0:
         ASN_nodes.append([my_IP, my_Port, my_ASN, node_key.publickey()])
     else:
         update_my_publicKey(my_IP, my_Port)

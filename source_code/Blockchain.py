@@ -5,7 +5,7 @@ from time import time
 from urllib.parse import urlparse
 from Block import Block
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
-from config import my_assignments, node_key, AS_topo, mutex
+from config import my_assignments, node_key, AS_topo, mutex, topo_mutex
 
 
 """
@@ -150,7 +150,6 @@ class Blockchain():
             self.chain = new_chain
             self.txid_to_block_update()
             self.state_update()
-            self.AS_topo_update()
             self.check_before_mining = True
             mutex.release()
             return True
@@ -276,6 +275,12 @@ class Blockchain():
                     elif transaction['type'] == "Update":
                         self.update_update(transaction)
 
+                    elif transaction['type'] == "BGP Announce":
+                        self.update_bgp_announce(transaction)
+
+                    elif transaction['type'] == "BGP Withdraw":
+                        pass
+
     def update_assign(self, transaction):
         """
         Updates the state for an Assign transaction
@@ -302,6 +307,15 @@ class Blockchain():
             if as_source == state[prefix][i][0]:
                 state[prefix].pop(i)
                 break  # the as_source has been removed from the state dict.
+
+        # also reject the previous topo for this prefix and start a new one.
+        topo_mutex.acquire()
+        topo = AS_topo[prefix]
+        self.clear_topology(topo, prefix, as_source)
+
+        for AS in asn_list:
+            topo.add_edge(AS, prefix)
+        topo_mutex.release()
 
     def update_revoke(self, transaction):
         """
@@ -385,22 +399,6 @@ class Blockchain():
             self.broadcast_transaction(new_revoke)
             my_assignments.remove(txid)
 
-    def AS_topo_update(self):
-        """
-        Updates the topologies based on the BGP Announce/Withdraw transactions
-
-        """
-        for block in self.chain:  # go through every block from the beginning
-            if block.index > 0:
-                for i in range(len(block.transactions)):
-                    transaction = block.transactions[i]['trans']
-
-                    if transaction['type'] == "BGP Announce":
-                        self.update_bgp_announce(transaction)
-
-                    elif transaction['type'] == "BGP Withdraw":
-                        pass
-
     def update_bgp_announce(self, transaction):
         """
         Updates the topology of a prefix given in an Announce transaction.
@@ -409,6 +407,7 @@ class Blockchain():
         """
         prefix = transaction['input'][0]
         sub_paths = transaction['output']
+        topo_mutex.acquire()
         topo = AS_topo[prefix]
 
         for path in sub_paths:
@@ -416,12 +415,46 @@ class Blockchain():
                 topo.add_edges_from([(path[2], prefix), (path[3], path[2])])  # don't add the 0 node in the graph
             else:
                 topo.add_edges_from([(path[2], path[1]), (path[3], path[2])])
+        topo_mutex.release()
+
+    def clear_topology(self, topo, prefix, source):
+        """
+        Removes the edges from the topology, after a new IP Assignment.
+
+        :param topo: The topology of this prefix
+        :param prefix: The prefix
+        :param source: The AS that made the Assign transaction.
+        """
+        try:
+            topo.remove_edge(source, prefix)
+        except nx.NetworkXError:
+            return
+        edges_to_source = set()
+        edges_to_prefix = set()
+        my_nodes = set()
+
+        # find all the edges from all the paths that lead to the source AS
+        for node in topo.nodes:
+            for path in nx.all_simple_paths(topo, node, source):
+                for i in range(len(path) - 1):
+                    my_nodes.add(path[i])
+                    my_nodes.add(path[i + 1])
+                    edges_to_source.add((path[i], path[i + 1]))
+
+        # find all the edges from the paths that lead to the prefix from the previous nodes
+        for node in my_nodes:
+            for path in nx.all_simple_paths(topo, node, prefix):
+                for i in range(len(path) - 1):
+                    edges_to_prefix.add((path[i], path[i + 1]))
+
+        diff = edges_to_source.difference(edges_to_prefix)
+        topo.remove_edges_from(diff)  # remove the edges that can't reach the prefix.
 
     def find_by_txid(self, txid):
         """
-        Finds a transaction based on a txid
+        Finds a transaction based on a txid.
 
-        :return: <dict> the requested transaction, None if not found
+        :return: <dict> the requested transaction, None if a transaction is not found.
         """
         try:
             index = txid_to_block[txid]

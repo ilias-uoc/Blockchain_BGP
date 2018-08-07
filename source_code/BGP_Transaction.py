@@ -1,17 +1,21 @@
 import hashlib
 import copy
 import networkx as nx
-from config import ASN_nodes, txid_to_block, state, AS_topo
+from config import ASN_nodes, txid_to_block, state, AS_topo, topo_mutex
 
 
 class BGP_Transaction():
     """
     BGP_Transaction is the superclass of all the types of BGP transactions.
     """
-    def __init__(self, prefix, as_source, time):
+    def __init__(self, prefix, bgp_timestamp, as_source, time, project, collector, asn_peer):
         self.as_source = as_source
         self.prefix = prefix
+        self.bgp_timestamp = bgp_timestamp
         self.time = time
+        self.project = project
+        self.collector = collector
+        self.asn_peer = asn_peer
         self.type = "BGPSuperClass"
         self.signature = None
         self.__input = []
@@ -119,10 +123,10 @@ class BGP_Transaction():
 
 
 class BGP_Announce(BGP_Transaction):
-    def __init__(self, prefix, adv_AS, source_ASes, destination_ASes, time):
-        super().__init__(prefix, adv_AS, time)
+    def __init__(self, prefix, bgp_timestamp, adv_AS, source_ASes, dest_ASes, time, project, collector, asn_peer):
+        super().__init__(prefix, bgp_timestamp, adv_AS, time, project, collector, asn_peer)
         self.as_source_list = source_ASes
-        self.as_dest_list = destination_ASes
+        self.as_dest_list = dest_ASes
         self.type = "BGP Announce"
 
     def validate_transaction(self):
@@ -132,7 +136,9 @@ class BGP_Announce(BGP_Transaction):
         :return: <bool> True if the transaction is valid, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and self.check_origin() and not self.check_loops():
-            input = [self.prefix, self.as_source, self.as_source_list, self.as_dest_list]
+            input = [self.prefix, self.as_source, self.as_source_list, self.as_dest_list, self.project, self.collector,
+                     self.bgp_timestamp, self.asn_peer]
+
             self.set_input(input)
 
             for AS_src in self.as_source_list:
@@ -149,7 +155,9 @@ class BGP_Announce(BGP_Transaction):
 
         :return: <Bool> True if the origin is verified. False otherwise.
         """
+        topo_mutex.acquire()
         topo = AS_topo[self.prefix]
+        topo_mutex.release()
 
         if len(self.as_source_list) == 0 or not self.check_network():
             return False
@@ -199,8 +207,10 @@ class BGP_Announce(BGP_Transaction):
 
         :return: <bool> True if there are loops. False otherwise.
         """
+        topo_mutex.acquire()
         old_topo = AS_topo[self.prefix]
         new_topo = copy.deepcopy(old_topo)
+        topo_mutex.release()
         self.find_new_topo(new_topo)
         try:
             nx.find_cycle(new_topo, source=self.as_source, orientation='original')
