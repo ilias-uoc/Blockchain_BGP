@@ -8,10 +8,10 @@ class BGP_Transaction():
     """
     BGP_Transaction is the superclass of all the types of BGP transactions.
     """
-    def __init__(self, prefix, bgp_timestamp, as_source, time, project, collector, asn_peer):
-        self.as_source = as_source
+    def __init__(self, prefix, as_source, time, bgp_timestamp=None, project=None, collector=None, asn_peer=None):
         self.prefix = prefix
         self.bgp_timestamp = bgp_timestamp
+        self.as_source = as_source
         self.time = time
         self.project = project
         self.collector = collector
@@ -124,7 +124,7 @@ class BGP_Transaction():
 
 class BGP_Announce(BGP_Transaction):
     def __init__(self, prefix, bgp_timestamp, adv_AS, source_ASes, dest_ASes, time, project, collector, asn_peer):
-        super().__init__(prefix, bgp_timestamp, adv_AS, time, project, collector, asn_peer)
+        super().__init__(prefix, adv_AS, time, bgp_timestamp, project, collector, asn_peer)
         self.as_source_list = source_ASes
         self.as_dest_list = dest_ASes
         self.type = "BGP Announce"
@@ -135,7 +135,7 @@ class BGP_Announce(BGP_Transaction):
 
         :return: <bool> True if the transaction is valid, False otherwise.
         """
-        if self.verify_signature(self.calculate_hash()) and self.check_origin() and not self.check_loops():
+        if self.verify_signature(self.calculate_hash()) and self.verify_origin() and not self.check_loops():
             input = [self.prefix, self.as_source, self.as_source_list, self.as_dest_list, self.project, self.collector,
                      self.bgp_timestamp, self.asn_peer]
 
@@ -149,7 +149,7 @@ class BGP_Announce(BGP_Transaction):
         else:
             return False
 
-    def check_origin(self):
+    def verify_origin(self):
         """
         Verifies the origin of this transaction, based on the topo of this prefix.
 
@@ -210,12 +210,14 @@ class BGP_Announce(BGP_Transaction):
         topo_mutex.acquire()
         old_topo = AS_topo[self.prefix]
         new_topo = copy.deepcopy(old_topo)
-        topo_mutex.release()
+
         self.find_new_topo(new_topo)
         try:
             nx.find_cycle(new_topo, source=self.as_source, orientation='original')
+            topo_mutex.release()
             return True
         except nx.NetworkXNoCycle:
+            topo_mutex.release()
             return False
 
     def find_new_topo(self, topo):
@@ -238,4 +240,44 @@ class BGP_Announce(BGP_Transaction):
 
 
 class BGP_Withdraw(BGP_Transaction):
-    pass
+    def __init__(self, prefix, withd_AS, time, bgp_timestamp=None, project=None, collector=None, asn_peer=None):
+        super().__init__(prefix, withd_AS, time, bgp_timestamp, project, collector, asn_peer)
+        self.type = "BGP Withdraw"
+
+    def validate_transaction(self):
+        """
+        Validates the transaction.
+
+        :return: <bool> True if the transaction is valid, False otherwise.
+        """
+        if self.verify_signature(self.calculate_hash()) and self.verify_path():
+            input = [self.prefix, self.as_source, self.bgp_timestamp, self.project, self.collector, self.asn_peer]
+            output = (self.prefix, self.as_source)
+            self.set_input(input)
+            self.set_output(output)
+            return True
+        else:
+            return False
+
+    def verify_path(self):
+        """
+        Checks if there is at least one path from the Withdrawing AS to the prefix.
+
+        :return: <Bool> True if there's at least one path, False otherwise.
+        """
+        topo_mutex.acquire()
+        topo = AS_topo[self.prefix]
+        # paths from as_source to prefix.
+        try:
+            paths = nx.all_simple_paths(topo, self.as_source, self.prefix)
+            topo_mutex.release()
+        except nx.NodeNotFound:
+            print("Error: Node not in graph")
+            topo_mutex.release()
+            return False
+
+        if len(list(paths)) == 0:
+            # no paths found.
+            return False
+        else:
+            return True

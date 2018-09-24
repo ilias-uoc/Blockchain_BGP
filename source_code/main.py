@@ -9,9 +9,10 @@ from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
 from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
+from config import as_to_announced_txids
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
-from BGP_Transaction import BGP_Announce
+from BGP_Transaction import BGP_Announce, BGP_Withdraw
 from Block import Block
 
 """
@@ -194,7 +195,7 @@ def start():
     broadcast_public_key()
     # request all public keys in the network
     request_public_key()
-    return "Successfully entered the BC network!", 200
+    return "Successfully entered the BC network.", 200
 
 
 """ ---------------------------------------------------------------------------------------------------------------  """
@@ -467,7 +468,7 @@ def new_bgp_announce():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None:
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
         pending_transactions.append(new_trans_dict)  # to be mined later
 
     return 'New BGP Announce transaction created. It was also broadcasted to the network', 200
@@ -504,11 +505,118 @@ def bgp_announce_incoming():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None:
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming BGP Announce transaction received", 200
     else:
         return "Incoming BGP Announce transaction invalid. Transaction is not accepted", 500
+
+
+@app.route('/transactions/bgp_withdraw/new', methods=['POST'])
+def new_bgp_withdraw():
+    """
+    Create a new BGP Withdraw transaction.
+    The AS node that makes the transaction signs it using its private key.
+    """
+    values = request.get_json()
+    # Check that required fields are in the posted data
+    required = ['prefix', 'as_source']
+    optional = ['bgp_timestamp', 'project', 'collector', 'asn_peer']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+    # check the optional fields.
+    for k in values:
+        if k not in set(required).union(set(optional)):
+            return 'Unavailable option', 400
+
+    # Create a new transaction
+    prefix = values['prefix']
+    as_source = values['as_source']
+    bgp_timestamp = None
+    project = None
+    collector = None
+    asn_peer = None
+
+    for k in values:
+        if k == 'bgp_timestamp':
+            bgp_timestamp = values[k]
+        elif k == 'project':
+            project = values[k]
+        elif k == 'collector':
+            collector = values[k]
+        elif k == 'asn_peer':
+            asn_peer = values[k]
+
+    tran_time = time()   # Transaction creation time
+
+    new_trans = BGP_Withdraw(prefix, as_source, tran_time, bgp_timestamp, project, collector, asn_peer)
+
+    trans_hash = new_trans.calculate_hash()
+    signature = node_key.sign(trans_hash.encode(), '')
+
+    new_trans.sign(signature)
+
+    # Broadcast it to the rest of the network (to be mined later)
+    blockchain.broadcast_transaction(new_trans)
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None and check_withdraw(prefix, as_source):
+        update_bgp_txids(as_source)
+        pending_transactions.append(new_trans_dict)  # to be mined later
+
+    return 'New BGP Withdraw transaction created. It was also broadcasted to the network', 200
+
+
+@app.route('/transactions/bgp_withdraw/incoming', methods=['POST'])
+def bgp_withdraw_incoming():
+    """
+    Receive an incoming BGP Withdraw transaction sent by an AS.
+    """
+    values = request.get_json()
+
+    # Check that the required fields are in the posted data
+    required = ['prefix', 'as_source', 'signature', 'time']
+    optional = ['bgp_timestamp', 'project', 'collector', 'asn_peer']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+    # check the optional fields.
+    for k in values:
+        if k not in set(required).union(set(optional)):
+            return 'Unavailable option', 400
+
+    prefix = values['prefix']
+    as_source = values['as_source']
+    signature = values['signature']
+    time = values['time']
+
+    bgp_timestamp = None
+    project = None
+    collector = None
+    asn_peer = None
+
+    for k in values:
+        if k == 'bgp_timestamp':
+            bgp_timestamp = values[k]
+        elif k == 'project':
+            project = values[k]
+        elif k == 'collector':
+            collector = values[k]
+        elif k == 'asn_peer':
+            asn_peer = values[k]
+
+    # Create a new transaction
+    new_trans = BGP_Withdraw(prefix, as_source, time, bgp_timestamp, project, collector, asn_peer)
+    new_trans.sign(signature)
+
+    new_trans_dict = new_trans.return_transaction()  # also validates the transaction
+
+    if new_trans_dict is not None and check_withdraw(prefix, as_source):
+        update_bgp_txids(as_source)
+        pending_transactions.append(new_trans_dict)  # to be mined later
+        return "Incoming BGP Withdraw transaction received", 200
+    else:
+        return "Incoming BGP Withdraw transaction invalid. Transaction is not accepted", 500
 
 
 def check_lease():
@@ -557,7 +665,7 @@ def check_lease():
 def check_assign(as_assign_source, original_lease, lease):
     """
     Checks the sum of all assign transactions made by as_assign_source. If the current sum + lease is greater than
-    the original lease this transaction is invalid so it should be removed from the pending transactions
+    the original lease this transaction is invalid so it should be removed from the pending transactions.
     """
     try:
         if assign_sum[as_assign_source] + lease > original_lease:
@@ -572,7 +680,7 @@ def check_assign(as_assign_source, original_lease, lease):
 def check_update(as_assign_source, original_lease, lease):
     """
     Checks the sum of all update transactions made by as_assign_source. If the current sum + lease is greater than
-    the original lease this transaction is invalid so it should be removed from the pending transactions
+    the original lease this transaction is invalid so it should be removed from the pending transactions.
     """
     try:
         if update_sum[as_assign_source] + lease > original_lease:
@@ -583,8 +691,7 @@ def check_update(as_assign_source, original_lease, lease):
         update_sum[as_assign_source] = lease
     return True
 
-# TODO: Below, a check that prevents the same BGP Announce transaction to be made multiple times in the same block.
-'''
+
 def check_announce(as_source, prefix, as_source_list, as_dest_list):
     """
     Checks whether a BGP Announce transaction was made more than once before it was withdrawn.
@@ -601,17 +708,49 @@ def check_announce(as_source, prefix, as_source_list, as_dest_list):
     txid_hash = hashlib.sha256(txid).hexdigest()
     try:
         x = bgp_txid_announced[txid_hash]
+        if not x:
+            as_to_announced_txids[as_source].add(txid_hash)
+            bgp_txid_announced[txid_hash] = True
         bgpa_mutex.release()
         return x
     except KeyError:
         bgp_txid_announced[txid_hash] = True
+        as_to_announced_txids[as_source] = set()
+        as_to_announced_txids[as_source].add(txid_hash)
         bgpa_mutex.release()
         return False
-'''
 
 
-def check_withdraw(as_source, prefix):
-    pass
+def check_withdraw(prefix, as_source):
+    """
+    Checks if the same withdraw transaction has already been made in the same block before mining.
+
+    :param as_source: The withdrawing AS
+    :param prefix: The prefix
+    :return: <Bool> True if the withdraw transaction has not been already made in the same block, False otherwise.
+    """
+    for i in range (len(pending_transactions)):
+        trans = pending_transactions[i]['trans']
+        if trans['type'] == "BGP Withdraw":
+            w_prefix = trans['input'][0]
+            w_as_source = trans['input'][1]
+            if w_prefix == prefix and w_as_source == as_source:
+                return False
+    return True
+
+
+def update_bgp_txids(as_source):
+    """
+    Marks all the txids made by as_source as False after a withdraw transaction made by as_source.
+
+    :param as_source: The withdrawing AS.
+    """
+    try:
+        txids_list = as_to_announced_txids[as_source]
+        for txid in txids_list:
+            bgp_txid_announced[txid] = False
+    except KeyError:
+        print("Error: Key not found.")
 
 
 """ ---------------------------------------------------------------------------------------------------------------  """
@@ -756,19 +895,26 @@ def mine():
 
 @app.route('/debug', methods=['GET'])
 def print_for_debugging():
+    print("\nAS NODES:")
     print(ASN_nodes)
+    print("\nTXID_TO_BLOCK:")
     print(txid_to_block)
+    print("\nSTATE:")
     print(state)
+    print("\nPENDING TRANSACTIONS:")
     print(pending_transactions)
+    print("\nBC NEIGHBORS:")
     print(blockchain.nodes)
+    print("\nBGP TXID ANNOUNCED:")
     print(bgp_txid_announced)
-    print(assigned_prefixes)
+    print("\nAS TO BGP ANNOUNCED:")
+    print(as_to_announced_txids)
     return "OK", 200
 
 
 @app.route('/T', methods=['GET'])
 def print_T():
-    pref = '139.91.0.0/16'
+    pref = '1.3.33.0/24'
     print(AS_topo[pref].edges)
     return 'OK', 200
 

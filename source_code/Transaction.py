@@ -134,7 +134,7 @@ class AssignTransaction(IPAllocationTransaction):
         self.source_lease = source_lease
         self.type = "Assign"
 
-        '''if not isinstance(as_dest, list):
+        '''TODO:: if not isinstance(as_dest, list):
             raise TypeError("AS destination must be set to a list")
 
         if not isinstance(as_source, str):

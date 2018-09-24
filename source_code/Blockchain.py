@@ -240,6 +240,9 @@ class Blockchain():
                 elif transaction_type == "BGP Announce":
                     requests.post('{}/transactions/bgp_announce/incoming'.format(node[0]),
                                   data=transaction_data, headers=headers)
+                elif transaction_type == "BGP Withdraw":
+                    requests.post('{}/transactions/bgp_withdraw/incoming'.format(node[0]),
+                                  data=transaction_data, headers=headers)
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
@@ -279,7 +282,7 @@ class Blockchain():
                         self.update_bgp_announce(transaction)
 
                     elif transaction['type'] == "BGP Withdraw":
-                        pass
+                        self.update_bgp_withdraw(transaction)
 
     def update_assign(self, transaction):
         """
@@ -415,6 +418,26 @@ class Blockchain():
                 topo.add_edges_from([(path[2], prefix), (path[3], path[2])])  # don't add the 0 node in the graph
             else:
                 topo.add_edges_from([(path[2], path[1]), (path[3], path[2])])
+        topo_mutex.release()
+
+    def update_bgp_withdraw(self, transaction):
+        """
+        Updates the topology of a prefix after a Withdraw transaction.
+
+        :param transaction: <dict> A BGP Withdraw transaction.
+        """
+        redundant_nodes = set()
+        prefix = transaction['input'][0]
+        as_source = transaction['input'][1]
+        topo_mutex.acquire()
+        topo = AS_topo[prefix]
+        topo.remove_node(as_source) # remove the withdrawing node.
+        # find all the other nodes that cannot reach the prefix.
+        for node in topo.nodes:
+            paths = nx.all_simple_paths(topo, node, prefix)
+            if len(list(paths)) == 0 and node != prefix:
+                redundant_nodes.add(node)  # these nodes cannot reach the prefix.
+        topo.remove_nodes_from(redundant_nodes)
         topo_mutex.release()
 
     def clear_topology(self, topo, prefix, source):

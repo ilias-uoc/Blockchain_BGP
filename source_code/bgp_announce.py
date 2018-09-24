@@ -54,7 +54,7 @@ def run_file(filename):
 
                 # make the request
                 announce_data = json.dumps(announce)
-                response = requests.post("http://localhost:(enter 8522's port here)/transactions/bgp_announce/new", data=announce_data,
+                response = requests.post("http://localhost:(enter 8522's port here(can be found in the new_nodes.csv file))/transactions/bgp_announce/new", data=announce_data,
                                          headers=headers)
                 '''
                 # form the topology
@@ -88,8 +88,53 @@ def main():
     parser.add_argument('-a', '--asn', help='the as number of the node')
     args = parser.parse_args()
     run_file(None)
-    pass
 
 
 if __name__ == '__main__':
     main()
+
+    # TODO:
+    '''
+    This is a simple announce + withdraw example...
+    If you want to test it run 1,2 and 3 separately and check the results in the chain.
+    Will update with a bgp withdraw script soon. 
+    '''
+
+    # 1) Node 5001 makes a new valid transaction
+    '''announce = {
+        "prefix": '1.3.33.0/24',
+        "as_source": '133741',
+        "as_source_list": ['0'],
+        "as_dest_list": ['13335', '18046'],
+        "bgp_timestamp": 111,
+        "asn_peer": '111',
+        "collector": '111',
+        "project": '111'
+    }
+    announce_data = json.dumps(announce)
+    response = requests.post("http://localhost:5001/transactions/bgp_announce/new", data=announce_data, headers=headers)'''
+
+    # 2) Node 5000 makes a new valid announce
+    '''announce = {
+        "prefix": '1.3.33.0/24',
+        "as_source": '13335',
+        "as_source_list": ['133741'],
+        "as_dest_list": ['133948'],
+        "bgp_timestamp": 111,
+        "asn_peer": '111',
+        "collector": '111',
+        "project": '111'
+    }
+    announce_data = json.dumps(announce)
+    response = requests.post("http://localhost:5000/transactions/bgp_announce/new", data=announce_data, headers=headers)'''
+
+    # 3) Node 5000 makes a new withdraw
+    '''prefix = '1.3.33.0/24'
+    my_ASN = '13335'
+    withdraw = {'prefix': prefix, 'as_source': my_ASN, 'project': None,
+                'collector': '111'}
+
+    # make the request
+    announce_data = json.dumps(withdraw)
+    response = requests.post("http://localhost:5000/transactions/bgp_withdraw/new", data=announce_data,
+                             headers=headers)'''

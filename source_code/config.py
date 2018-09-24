@@ -25,6 +25,7 @@ update_sum = {}  # { 'AS Number' : sum }
 assign_sum = {}  # { 'AS Number' : sum }
 
 bgp_txid_announced = {}  # { 'txid' : True/False }
+as_to_announced_txids = {}  # { 'AS' : [txid1, txid2, ... , txidn] }
 
 AS_topo = {}  # { 'prefix' : Graph for this prefix }
 
