@@ -2,6 +2,7 @@ import hashlib
 import json
 import requests
 from urllib.parse import urlparse
+from networkx.drawing.nx_agraph import to_agraph
 from time import time
 from flask import Flask, jsonify, request
 from argparse import ArgumentParser
@@ -9,14 +10,14 @@ from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
 from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
-from config import as_to_announced_txids
+from config import as_to_announced_txids, topo_mutex
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from BGP_Transaction import BGP_Announce, BGP_Withdraw
 from Block import Block
 
 """
-The main functionality is here
+The main functionality is here.
 """
 
 app = Flask(__name__)
@@ -912,11 +913,43 @@ def print_for_debugging():
     return "OK", 200
 
 
-@app.route('/T', methods=['GET'])
-def print_T():
-    pref = '1.3.33.0/24'
-    print(AS_topo[pref].edges)
-    return 'OK', 200
+@app.route('/topos', methods=['GET'])
+def return_topos():
+    """
+    Returns all the topologies of all the prefixes.
+    """
+    topos = {}
+    topo_mutex.acquire()
+    for prefix in AS_topo.keys():
+        topos[prefix] = list(AS_topo[prefix].edges)
+    topo_mutex.release()
+    return jsonify(topos), 200
+
+
+@app.route('/gv', methods=['POST'])
+def graph_visualization():
+    """
+    Creates an image of the graph of the prefix requested.
+    """
+    values = request.get_json()
+    required = ['prefix']
+    if not all(k in values for k in required):
+        return 'Missing Values', 400
+
+    prefix = values['prefix']
+    topo_mutex.acquire()
+    try:
+        graph = AS_topo[prefix]
+        graph.nodes[prefix].update(style='filled', fillcolor='lightblue')
+        A = to_agraph(graph)
+        A.layout('dot')
+        prefix = prefix.replace('/', '-')
+        A.draw('graph_for_' + prefix + '.png')
+        topo_mutex.release()
+    except KeyError:
+        topo_mutex.release()
+        return 'The prefix does not exists', 400
+    return 'Check your folder for a pic of the graph', 200
 
 
 @app.route('/transactions/find_by_txid', methods=['POST'])

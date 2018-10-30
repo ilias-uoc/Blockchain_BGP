@@ -247,7 +247,6 @@ class RevokeTransaction(IPAllocationTransaction):
 
             if self.time >= timestamp + 2629743.83 * lease:  # 1 month = 2629743.83 secs
                 return True
-
         return False
 
     def get_assign_tran(self):

@@ -35,10 +35,7 @@ class Block():
         :return: <bool> True if correct, False otherwise.
         """
         block_hash = self.calculate_hash(nonce)
-        if block_hash[:4] == "0000":
-            return True
-        else:
-            return False
+        return block_hash[:4] == "0000"
 
     def calculate_hash(self, nonce=None):
         """

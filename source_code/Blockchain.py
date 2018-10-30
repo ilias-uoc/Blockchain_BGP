@@ -334,8 +334,8 @@ class Blockchain():
 
         if assign_tran is not None:
             tran = assign_tran['trans']
-            as_dest_list = tran['input'][2]
             prefix = tran['input'][0]
+            as_dest_list = tran['input'][2]
             last_assign = tran['input'][-1]
 
             for asn in as_dest_list:
@@ -352,6 +352,16 @@ class Blockchain():
                     break
             if found == 0:
                 state[prefix].append((as_source, ld, tt, last_assign))  # the one that did the revocation
+
+            # also restore the topology of this prefix.
+            topo_mutex.acquire()
+            topo = AS_topo[prefix]
+
+            for AS in as_dest_list:
+                self.clear_topology(topo, prefix, AS)  # remove the ASes that no longer own the prefix.
+
+            topo.add_edge(as_source, prefix)  # add the AS that did the revocation and now owns the prefix.
+            topo_mutex.release()
 
     def update_update(self, transaction):
         """
@@ -442,7 +452,7 @@ class Blockchain():
 
     def clear_topology(self, topo, prefix, source):
         """
-        Removes the edges from the topology, after a new IP Assignment.
+        Removes the edges from the topology after a new IP Assignment.
 
         :param topo: The topology of this prefix
         :param prefix: The prefix
