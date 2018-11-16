@@ -943,7 +943,7 @@ def graph_visualization():
         graph.nodes[prefix].update(style='filled', fillcolor='lightblue')
         A = to_agraph(graph)
         A.layout('dot')
-        prefix = prefix.replace('/', '-')
+        prefix = prefix.replace('/', '+')
         A.draw('graph_for_' + prefix + '.png')
         topo_mutex.release()
     except KeyError:

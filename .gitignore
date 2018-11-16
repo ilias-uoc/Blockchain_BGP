@@ -101,3 +101,7 @@ ENV/
 .mypy_cache/
 *.xml
 *.iml
+
+# misc
+new_nodes.csv
+t.py

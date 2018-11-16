@@ -1,18 +1,18 @@
-import csv
+import csv, argparse
 import shlex, subprocess, requests
-from time import sleep
 import socket
+from time import sleep
 from contextlib import closing
 
 
 nodes = set()
 
 
-def extract_nodes():
+def extract_nodes(filename):
     """
     Adds all the nodes from the bgpstream file to a new set.
     """
-    f = open('../bgpstream/forth_25_7_2018_9_to_10_am/P_139.91.0.0+16-S_1532509200-E_1532512800.csv', 'r')
+    f = open(filename, 'r')
 
     try:
         reader = csv.reader(f, delimiter='|')
@@ -89,7 +89,12 @@ def run_nodes():
 
 
 def main():
-    extract_nodes()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', '--file', default='../bgpstream/forth_25_7_2018_9_to_10_am/P_139.91.0.0+16-S' +
+                                                '_1532509200-E_1532512800.csv',
+                        type=str, help='file with bgpstream data')
+    args = parser.parse_args()
+    extract_nodes(args.file)
     dump_nodes()
     run_nodes()
 
