@@ -134,16 +134,6 @@ class AssignTransaction(IPAllocationTransaction):
         self.source_lease = source_lease
         self.type = "Assign"
 
-        '''TODO:: if not isinstance(as_dest, list):
-            raise TypeError("AS destination must be set to a list")
-
-        if not isinstance(as_source, str):
-            raise TypeError("AS source must be set to a string")
-
-        for i in as_dest:
-            if not isinstance(i, str):
-                raise TypeError("AS destination list element must be set to a string") ???????'''
-
     def validate_transaction(self):
         """
         Validates the transaction.

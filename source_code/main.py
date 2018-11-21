@@ -10,7 +10,7 @@ from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
 from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
-from config import as_to_announced_txids, topo_mutex
+from config import as_to_announced_txids, topo_mutex, AN_mutex, alive_neighbors
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from BGP_Transaction import BGP_Announce, BGP_Withdraw
@@ -22,7 +22,6 @@ The main functionality is here.
 
 app = Flask(__name__)
 
-
 """ --------------------------------------Routes and functions for the network-------------------------------------- """
 
 
@@ -31,7 +30,7 @@ def register_nodes():
     Registers the other nodes of the network.
     The node running the script enters the BC network.
     """
-    # first register the known ASes
+    # first register the bootstrap nodes
     for asn in ASN_nodes:
         if my_IP in asn and my_Port == asn[1]:
             continue
@@ -184,6 +183,48 @@ def receive_incoming_public_key():
     return "Received a public key.", 200
 
 
+'''
+@app.route('/alive', methods=['POST'])
+def neighbor_is_alive():
+    """
+
+    :return:
+    """
+    values = request.get_json()
+    required = ['ip', 'port']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+    ip = values['ip']
+    port = values['port']
+    url = "http://" + ip + ":" + port
+    time_received = time()
+    AN_mutex.acquire()
+    alive_neighbors[url] = time_received
+    AN_mutex.release()
+
+
+def send_alive():
+    """
+
+    :return:
+    """
+    my_info = {
+        'ip':  my_IP,
+        'port': my_Port,
+    }
+    my_data = json.dumps(my_info)
+
+    print("Sending alive message to everyone in the network...")
+
+    for node in blockchain.nodes:
+        try:
+            requests.post('{}/alive'.format(node[0]), data=my_data, headers=headers)
+        except:
+            print("Could not contact node {}. Moving on...".format(node[0]))
+            continue
+'''
+
+
 @app.route('/', methods=['GET'])
 def start():
     """
@@ -194,6 +235,7 @@ def start():
     register_nodes()
     # broadcast your public key
     broadcast_public_key()
+    # send alive send_alive()
     # request all public keys in the network
     request_public_key()
     return "Successfully entered the BC network.", 200
@@ -469,7 +511,7 @@ def new_bgp_announce():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
         pending_transactions.append(new_trans_dict)  # to be mined later
 
     return 'New BGP Announce transaction created. It was also broadcasted to the network', 200
@@ -506,7 +548,7 @@ def bgp_announce_incoming():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
-    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list):
+    if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming BGP Announce transaction received", 200
     else:
@@ -522,35 +564,16 @@ def new_bgp_withdraw():
     values = request.get_json()
     # Check that required fields are in the posted data
     required = ['prefix', 'as_source']
-    optional = ['bgp_timestamp', 'project', 'collector', 'asn_peer']
     if not all(k in values for k in required):
         return 'Missing values', 400
-    # check the optional fields.
-    for k in values:
-        if k not in set(required).union(set(optional)):
-            return 'Unavailable option', 400
 
     # Create a new transaction
     prefix = values['prefix']
     as_source = values['as_source']
-    bgp_timestamp = None
-    project = None
-    collector = None
-    asn_peer = None
-
-    for k in values:
-        if k == 'bgp_timestamp':
-            bgp_timestamp = values[k]
-        elif k == 'project':
-            project = values[k]
-        elif k == 'collector':
-            collector = values[k]
-        elif k == 'asn_peer':
-            asn_peer = values[k]
 
     tran_time = time()   # Transaction creation time
 
-    new_trans = BGP_Withdraw(prefix, as_source, tran_time, bgp_timestamp, project, collector, asn_peer)
+    new_trans = BGP_Withdraw(prefix, as_source, tran_time)
 
     trans_hash = new_trans.calculate_hash()
     signature = node_key.sign(trans_hash.encode(), '')
@@ -578,36 +601,16 @@ def bgp_withdraw_incoming():
 
     # Check that the required fields are in the posted data
     required = ['prefix', 'as_source', 'signature', 'time']
-    optional = ['bgp_timestamp', 'project', 'collector', 'asn_peer']
     if not all(k in values for k in required):
         return 'Missing values', 400
-    # check the optional fields.
-    for k in values:
-        if k not in set(required).union(set(optional)):
-            return 'Unavailable option', 400
 
     prefix = values['prefix']
     as_source = values['as_source']
     signature = values['signature']
     time = values['time']
 
-    bgp_timestamp = None
-    project = None
-    collector = None
-    asn_peer = None
-
-    for k in values:
-        if k == 'bgp_timestamp':
-            bgp_timestamp = values[k]
-        elif k == 'project':
-            project = values[k]
-        elif k == 'collector':
-            collector = values[k]
-        elif k == 'asn_peer':
-            asn_peer = values[k]
-
     # Create a new transaction
-    new_trans = BGP_Withdraw(prefix, as_source, time, bgp_timestamp, project, collector, asn_peer)
+    new_trans = BGP_Withdraw(prefix, as_source, time)
     new_trans.sign(signature)
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
@@ -693,7 +696,7 @@ def check_update(as_assign_source, original_lease, lease):
     return True
 
 
-def check_announce(as_source, prefix, as_source_list, as_dest_list):
+def check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
     """
     Checks whether a BGP Announce transaction was made more than once before it was withdrawn.
 
@@ -704,19 +707,24 @@ def check_announce(as_source, prefix, as_source_list, as_dest_list):
 
     :return: <Bool> True if the transaction was made before. False otherwise.
     """
+    as_source_list.sort()
+    as_dest_list.sort()
     bgpa_mutex.acquire()
-    txid = '{}{}{}{}'.format(as_source, prefix, as_source_list, as_dest_list).encode()
+    txid = '{}{}{}{}'.format(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp).encode()
     txid_hash = hashlib.sha256(txid).hexdigest()
     try:
+        as_set = as_to_announced_txids[as_source]
+    except KeyError:
+        as_to_announced_txids[as_source] = set()
+    try:
         x = bgp_txid_announced[txid_hash]
-        if not x:
-            as_to_announced_txids[as_source].add(txid_hash)
+        if x is False:
             bgp_txid_announced[txid_hash] = True
+            as_to_announced_txids[as_source].add(txid_hash)
         bgpa_mutex.release()
         return x
     except KeyError:
         bgp_txid_announced[txid_hash] = True
-        as_to_announced_txids[as_source] = set()
         as_to_announced_txids[as_source].add(txid_hash)
         bgpa_mutex.release()
         return False
@@ -747,11 +755,15 @@ def update_bgp_txids(as_source):
     :param as_source: The withdrawing AS.
     """
     try:
+        bgpa_mutex.acquire()
         txids_list = as_to_announced_txids[as_source]
         for txid in txids_list:
             bgp_txid_announced[txid] = False
+        as_to_announced_txids[as_source].clear()
+        bgpa_mutex.release()
     except KeyError:
         print("Error: Key not found.")
+        bgpa_mutex.release()
 
 
 """ ---------------------------------------------------------------------------------------------------------------  """

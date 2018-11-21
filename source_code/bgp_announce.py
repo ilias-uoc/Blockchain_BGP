@@ -39,7 +39,6 @@ def make_announce_transaction(data):
 
     origin_asns = origin_as.split(",")
     path_asns = as_path.split(",")
-
     for orAS in origin_asns:
         as_source_set = set()
         as_dest_set = set()
@@ -57,7 +56,7 @@ def make_announce_transaction(data):
         # make the request
         announce_data = json.dumps(announce)
         ip, port = find_AS_ip_port(orAS)
-        requests.post('http://' + ip + ':' + str(port) + '/transactions/bgp_announce/new', data=announce_data,
+        requests.post('http://' + str(ip) + ':' + str(port) + '/transactions/bgp_announce/new', data=announce_data,
                       headers=headers)
 
 

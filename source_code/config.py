@@ -31,11 +31,14 @@ as_to_announced_txids = {}  # { 'AS' : [txid1, txid2, ... , txidn] }
 assigned_prefixes = set()
 assign_txids = set()
 
+alive_neighbors = {}  # { 'url of neighbor' : time_received }
+
 # different mutexes for some critical sections
 mutex = threading.Lock()
 pt_mutex = threading.Lock()
 bgpa_mutex = threading.Lock()
 topo_mutex = threading.Lock()
+AN_mutex = threading.Lock()
 
 
 def init_nodes():

@@ -38,58 +38,45 @@ def plot_cdf(results):
     colors = ('k', 'g', 'b', 'r')
     linestyles = ('-', '--', '-.', ':')
     styles = ['{}{}'.format(color, linestyles[i]) for i, color in enumerate(colors)]
-    style_index = 0
-    fontsize = 20
 
-    ecdfs = {}
-    for i in results.keys():
-        ecdfs[i] = sm.distributions.ECDF(results[i])
+    cdf = sm.distributions.ECDF(results)
 
     x = set_x_axes(results)
-    y = set_y_axes(results, ecdfs, x)
+    y = set_y_axes(cdf, x)
 
     fig, ax = plt.subplots()
     plt.subplots_adjust(bottom=0.15)
     plt.subplots_adjust(top=0.9)
-    for i in results.keys():
-        ax.plot(x[i], y[i], styles[style_index],
-                label='{}'.format(i))
-        style_index = (style_index + 1) % len(styles)
+
+    ax.plot(x, y, styles[0])
 
     # activate grid
     ax.grid(True, which='both')
     ax.xaxis.grid(linestyle=':')
     ax.yaxis.grid(linestyle=':')
 
-    plt.savefig("lala.png")
+    plt.savefig("cdf.png")
     plt.close()
 
 
 def set_x_axes(results):
     # set x axes
-    x = {}
-    x_min = min([min(results[i]) for i in results.keys()])
-    x_max = max([max(results[i]) for i in results.keys()])
-
-    for i in results.keys():
-        x[i] = np.linspace(x_min, x_max, 1000)
+    x_min = min(results)
+    x_max = max(results)
+    x= np.linspace(x_min, x_max, 1000)
     return x
 
 
-def set_y_axes(results, ecdfs, x):
+def set_y_axes(cdf, x):
     # set y axes
-    y = {}
-    for i in results.keys():
-        y[i] = ecdfs[i](x[i])
+    y = cdf(x)
     return y
 
 
 def main():
     all_diffs, per_block_diffs = get_time_diff()
     # block index: time differences of all the transactions in this block
-    plot_cdf(per_block_diffs)
-    print(all_diffs)
-    print(per_block_diffs)
+    plot_cdf(all_diffs)
 
 
 if __name__ == '__main__':
