@@ -441,7 +441,11 @@ class Blockchain():
         as_source = transaction['input'][1]
         topo_mutex.acquire()
         topo = AS_topo[prefix]
-        topo.remove_node(as_source) # remove the withdrawing node.
+        # remove the edges between the withdrawing node and its predecessors.
+        pred_edges = []
+        for pred in topo.predecessors(as_source):
+            pred_edges.append((pred, as_source))
+        topo.remove_edges_from(pred_edges)
         # find all the other nodes that cannot reach the prefix.
         for node in topo.nodes:
             paths = nx.all_simple_paths(topo, node, prefix)
