@@ -1,6 +1,7 @@
 import hashlib
 import json
 import requests
+import threading
 from urllib.parse import urlparse
 from networkx.drawing.nx_agraph import to_agraph
 from time import time
@@ -183,12 +184,11 @@ def receive_incoming_public_key():
     return "Received a public key.", 200
 
 
-'''
 @app.route('/alive', methods=['POST'])
 def neighbor_is_alive():
     """
-
-    :return:
+    It updates the alive neighbors dictionary every time
+    a neighbor sends an alive message.
     """
     values = request.get_json()
     required = ['ip', 'port']
@@ -196,33 +196,86 @@ def neighbor_is_alive():
         return 'Missing values', 400
     ip = values['ip']
     port = values['port']
-    url = "http://" + ip + ":" + port
+    url = "http://" + str(ip) + ":" + str(port)
     time_received = time()
     AN_mutex.acquire()
     alive_neighbors[url] = time_received
     AN_mutex.release()
+    return "ok", 200
 
 
 def send_alive():
     """
-
-    :return:
+    Send an alive message to all the neighbors.
+    This function is being called every 20 seconds.
     """
+    headers = {
+        "Content-Type": "application/json"
+    }
     my_info = {
         'ip':  my_IP,
         'port': my_Port,
     }
     my_data = json.dumps(my_info)
 
-    print("Sending alive message to everyone in the network...")
-
     for node in blockchain.nodes:
         try:
-            requests.post('{}/alive'.format(node[0]), data=my_data, headers=headers)
+            requests.post('{}/alive'.format(node[0]), data=my_data, headers=headers)  # send alive to every neighbor
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))
             continue
-'''
+    # start a timer that calls this function every 20 seconds.
+    threading.Timer(20.0, send_alive).start()
+
+
+def check_alive():
+    """
+    Checks if the neighbors are still here.
+    Removes the dead neighbors from the neighbors set.
+    """
+    neighbors = blockchain.nodes
+    dead_neighbors = []
+    for node in neighbors:
+        try:
+            url = node[0]
+            AN_mutex.acquire()
+            last_alive = alive_neighbors[url]
+            AN_mutex.release()
+            time_now = time()
+            if time_now - last_alive > 60:
+                dead_neighbors.append(node)
+        except KeyError:
+            # node was already removed, do nothing
+            AN_mutex.release()
+    for node in dead_neighbors:
+        # I also need mutexes for blockchain.nodes and ASN_nodes this is a TODO.
+        neighbors.remove(node)
+        AN_mutex.acquire()
+        alive_neighbors.pop(node[0])
+        remove_from_ASN_Nodes(node[0])
+        AN_mutex.release()
+    # start a timer that calls this function every 60 seconds.
+    threading.Timer(60.0, check_alive).start()
+
+
+def remove_from_ASN_Nodes(url):
+    """
+    Removes dead neighbors from the ASN Nodes list,
+    so that we can register them again if they rejoin the network.
+    that contain offline information about a neighbor i.e. its public key.
+    :param url: the url address of the neighbor
+    """
+    parsed_url = urlparse(url)
+    ip_port_list = parsed_url.netloc.split(":")
+    ip_addr = ip_port_list[0]
+    port = int(ip_port_list[1])
+    node = None
+    for asn in ASN_nodes:
+        if ip_addr in asn and port == asn[1]:
+            node = asn
+            break
+    if node is not None:
+        ASN_nodes.remove(node)
 
 
 @app.route('/', methods=['GET'])
@@ -235,9 +288,12 @@ def start():
     register_nodes()
     # broadcast your public key
     broadcast_public_key()
-    # send alive send_alive()
     # request all public keys in the network
     request_public_key()
+    # send alive to all the neighbors
+    send_alive()
+    # start timer to check your neighbors
+    check_alive()
     return "Successfully entered the BC network.", 200
 
 
@@ -922,6 +978,8 @@ def print_for_debugging():
     print(bgp_txid_announced)
     print("\nAS TO BGP ANNOUNCED:")
     print(as_to_announced_txids)
+    print("\nALIVE NEIGHBORS TIMES:")
+    print(alive_neighbors)
     return "OK", 200
 
 
