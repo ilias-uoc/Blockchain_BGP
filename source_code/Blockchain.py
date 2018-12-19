@@ -5,7 +5,7 @@ from time import time
 from urllib.parse import urlparse
 from Block import Block
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
-from config import my_assignments, node_key, AS_topo, mutex, topo_mutex
+from config import my_assignments, node_key, AS_topo, mutex, topo_mutex, invalid_transactions
 
 
 """
@@ -90,6 +90,10 @@ class Blockchain():
             if not self.verify_signature(block):
                 return False
 
+            # check if a transaction in a block is in the invalid chain list
+            if self.check_for_invalid_tran(block):
+                return False
+
             last_block = block
             current_index += 1
         return True
@@ -112,6 +116,19 @@ class Blockchain():
             return ASN_pkey.verify(block_hash.encode(), block.signature)
         else:
             return False
+
+    def check_for_invalid_tran(self, block):
+        """
+
+        :param block: <Block>
+        :return: <bool> True if the txid is of an invalid transaction, False if not.
+        """
+        for i in range(len(block.transactions)):
+            transaction = block.transactions[i]['trans']
+
+            if transaction['txid'] in invalid_transactions:
+                return True
+        return False
 
     def resolve_conflicts(self):
         """
@@ -295,7 +312,7 @@ class Blockchain():
         asn_list = transaction['input'][2]
         ld = transaction['input'][4]
         tt = transaction['input'][5]
-        last_assign = transaction['txid']
+        last_assign = transaction['input'][-1]
 
         found = 0
         for asn in asn_list:

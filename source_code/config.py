@@ -19,6 +19,7 @@ as2pref, pref2as_pyt = get_as_prefs()
 
 txid_to_block = {}  # {'txid' : block index}
 pending_transactions = []
+invalid_transactions = []  # a list of hashes of all invalid transactions
 
 my_assignments = set()  # a set of the txids of all the assign transactions a node has made
 

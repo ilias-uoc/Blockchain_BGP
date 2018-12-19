@@ -11,7 +11,7 @@ from Crypto.PublicKey import RSA
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
 from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
-from config import as_to_announced_txids, topo_mutex, AN_mutex, alive_neighbors
+from config import as_to_announced_txids, topo_mutex, AN_mutex, alive_neighbors, invalid_transactions
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from BGP_Transaction import BGP_Announce, BGP_Withdraw
@@ -388,6 +388,9 @@ def receive_incoming_assign_transaction():
         assigned_prefixes.add(prefix)
         return "Incoming Assign transaction received", 200
     else:
+        # store the hash of this invalid transaction to the list
+        tran_hash = new_trans.calculate_hash()
+        invalid_transactions.append(tran_hash)
         return "Incoming Assign transaction invalid. Transaction is not accepted", 500
 
 
@@ -456,6 +459,9 @@ def receive_incoming_revoke_transaction():
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming Revoke transaction received", 200
     else:
+        # store the hash of this invalid transaction to the list
+        tran_hash = new_trans.calculate_hash()
+        invalid_transactions.append(tran_hash)
         return "Incoming Revoke transaction invalid. Transaction is not accepted", 500
 
 
@@ -526,6 +532,9 @@ def receive_incoming_update_transaction():
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming Update transaction received", 200
     else:
+        # store the hash of this invalid transaction to the list
+        tran_hash = new_trans.calculate_hash()
+        invalid_transactions.append(tran_hash)
         return "Incoming Update transaction invalid. Transaction is not accepted", 500
 
 
@@ -608,6 +617,9 @@ def bgp_announce_incoming():
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming BGP Announce transaction received", 200
     else:
+        # store the hash of this invalid transaction to the list
+        tran_hash = new_trans.calculate_hash()
+        invalid_transactions.append(tran_hash)
         return "Incoming BGP Announce transaction invalid. Transaction is not accepted", 500
 
 
@@ -676,6 +688,9 @@ def bgp_withdraw_incoming():
         pending_transactions.append(new_trans_dict)  # to be mined later
         return "Incoming BGP Withdraw transaction received", 200
     else:
+        # store the hash of this invalid transaction to the list
+        tran_hash = new_trans.calculate_hash()
+        invalid_transactions.append(tran_hash)
         return "Incoming BGP Withdraw transaction invalid. Transaction is not accepted", 500
 
 
