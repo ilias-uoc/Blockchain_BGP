@@ -12,6 +12,7 @@ from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pre
 from config import node_key, my_IP, my_ASN, my_Port, my_assignments, update_sum, assign_sum
 from config import bgp_txid_announced, mutex, AS_topo, pt_mutex, bgpa_mutex, assigned_prefixes, assign_txids
 from config import as_to_announced_txids, topo_mutex, AN_mutex, alive_neighbors, invalid_transactions
+from config import asn_nodes_mutex, bc_nodes_mutex
 from Blockchain import blockchain
 from Transaction import AssignTransaction, RevokeTransaction, UpdateTransaction
 from BGP_Transaction import BGP_Announce, BGP_Withdraw
@@ -40,6 +41,7 @@ def register_nodes():
             blockchain.register_node(ip, asn[2])
 
     # then find out about the rest of the network
+    bc_nodes_mutex.acquire()
     neighbors = blockchain.nodes
     network = []
     for node in neighbors:
@@ -53,6 +55,7 @@ def register_nodes():
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))
             continue
+    bc_nodes_mutex.release()
 
     for node in network:
         parsed_url = urlparse(node[0])
@@ -72,11 +75,13 @@ def send_neighbors():
 
     :return: <json> This node's neighbors.
     """
+    bc_nodes_mutex.acquire()
     neighbors = blockchain.nodes
     neighbors_dict = {}
 
     for i, node in enumerate(neighbors):
         neighbors_dict[i] = node
+    bc_nodes_mutex.release()
 
     return jsonify(neighbors_dict), 200
 
@@ -112,13 +117,15 @@ def broadcast_public_key():
     my_data = json.dumps(my_info)
 
     print("Broadcasting my public key to the network...")
-
-    for node in blockchain.nodes:
+    bc_nodes_mutex.acquire()
+    neighbors = blockchain.nodes
+    for node in neighbors:
         try:
             requests.post('{}/public_key/incoming'.format(node[0]), data=my_data, headers=headers)
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))
             continue
+    bc_nodes_mutex.release()
 
 
 def update_nodes_publicKey(externKey, IPAddress, port):
@@ -128,6 +135,7 @@ def update_nodes_publicKey(externKey, IPAddress, port):
     for i in range(len(ASN_nodes)):
         if ASN_nodes[i][0] == IPAddress and ASN_nodes[i][1] == port:
             ASN_nodes[i][-1] = RSA.importKey(externKey)
+            break
 
 
 def request_public_key():
@@ -136,6 +144,7 @@ def request_public_key():
     Updates the ASN Nodes list.
     """
     print("Requesting my neighbors' public keys...")
+    bc_nodes_mutex.acquire()
     neighbors = blockchain.nodes
     for node in neighbors:
         try:
@@ -150,6 +159,7 @@ def request_public_key():
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))
             continue
+    bc_nodes_mutex.release()
 
 
 @app.route('/public_key/incoming', methods=['POST'])
@@ -170,10 +180,12 @@ def receive_incoming_public_key():
     public_key = values['public_key']
 
     found = 0
+    asn_nodes_mutex.acquire()
     for AS in ASN_nodes:
         if ip in AS and int(port) == AS[1]:
             found = 1
             break
+    asn_nodes_mutex.release()
 
     if found == 0:
         ASN_nodes.append([ip, int(port), asn, None])
@@ -217,13 +229,14 @@ def send_alive():
         'port': my_Port,
     }
     my_data = json.dumps(my_info)
-
+    bc_nodes_mutex.acquire()
     for node in blockchain.nodes:
         try:
             requests.post('{}/alive'.format(node[0]), data=my_data, headers=headers)  # send alive to every neighbor
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))
             continue
+    bc_nodes_mutex.release()
     # start a timer that calls this function every 20 seconds.
     threading.Timer(20.0, send_alive).start()
 
@@ -233,7 +246,9 @@ def check_alive():
     Checks if the neighbors are still here.
     Removes the dead neighbors from the neighbors set.
     """
-    neighbors = blockchain.nodes
+    bc_nodes_mutex.acquire()
+    neighbors = blockchain.nodes.copy()
+    bc_nodes_mutex.release()
     dead_neighbors = []
     for node in neighbors:
         try:
@@ -248,11 +263,12 @@ def check_alive():
             # node was already removed, do nothing
             AN_mutex.release()
     for node in dead_neighbors:
-        # I also need mutexes for blockchain.nodes and ASN_nodes this is a TODO.
         neighbors.remove(node)
         AN_mutex.acquire()
         alive_neighbors.pop(node[0])
+        asn_nodes_mutex.acquire()
         remove_from_ASN_Nodes(node[0])
+        asn_nodes_mutex.release()
         AN_mutex.release()
     # start a timer that calls this function every 60 seconds.
     threading.Timer(60.0, check_alive).start()
@@ -383,13 +399,17 @@ def receive_incoming_assign_transaction():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
+    tran_hash = new_trans.calculate_hash()
+
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
         assigned_prefixes.add(prefix)
+        # for out of order transactions
+        if tran_hash in invalid_transactions:
+            invalid_transactions.remove(tran_hash)
         return "Incoming Assign transaction received", 200
     else:
         # store the hash of this invalid transaction to the list
-        tran_hash = new_trans.calculate_hash()
         invalid_transactions.append(tran_hash)
         return "Incoming Assign transaction invalid. Transaction is not accepted", 500
 
@@ -455,12 +475,16 @@ def receive_incoming_revoke_transaction():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
+    tran_hash = new_trans.calculate_hash()
+
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
+        # for out of order transactions
+        if tran_hash in invalid_transactions:
+            invalid_transactions.remove(tran_hash)
         return "Incoming Revoke transaction received", 200
     else:
         # store the hash of this invalid transaction to the list
-        tran_hash = new_trans.calculate_hash()
         invalid_transactions.append(tran_hash)
         return "Incoming Revoke transaction invalid. Transaction is not accepted", 500
 
@@ -528,12 +552,16 @@ def receive_incoming_update_transaction():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
+    tran_hash = new_trans.calculate_hash()
+
     if new_trans_dict is not None:
         pending_transactions.append(new_trans_dict)  # to be mined later
+        # for out of order transactions
+        if tran_hash in invalid_transactions:
+            invalid_transactions.remove(tran_hash)
         return "Incoming Update transaction received", 200
     else:
         # store the hash of this invalid transaction to the list
-        tran_hash = new_trans.calculate_hash()
         invalid_transactions.append(tran_hash)
         return "Incoming Update transaction invalid. Transaction is not accepted", 500
 
@@ -613,12 +641,16 @@ def bgp_announce_incoming():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
+    tran_hash = new_trans.calculate_hash()
+
     if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
         pending_transactions.append(new_trans_dict)  # to be mined later
+        # for out of order transactions
+        if tran_hash in invalid_transactions:
+            invalid_transactions.remove(tran_hash)
         return "Incoming BGP Announce transaction received", 200
     else:
         # store the hash of this invalid transaction to the list
-        tran_hash = new_trans.calculate_hash()
         invalid_transactions.append(tran_hash)
         return "Incoming BGP Announce transaction invalid. Transaction is not accepted", 500
 
@@ -683,13 +715,17 @@ def bgp_withdraw_incoming():
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
+    tran_hash = new_trans.calculate_hash()
+
     if new_trans_dict is not None and check_withdraw(prefix, as_source):
         update_bgp_txids(as_source)
-        pending_transactions.append(new_trans_dict)  # to be mined later
+        pending_transactions.append(new_trans_dict)  # to be mined
+        # for out of order transactions
+        if tran_hash in invalid_transactions:
+            invalid_transactions.remove(tran_hash)
         return "Incoming BGP Withdraw transaction received", 200
     else:
         # store the hash of this invalid transaction to the list
-        tran_hash = new_trans.calculate_hash()
         invalid_transactions.append(tran_hash)
         return "Incoming BGP Withdraw transaction invalid. Transaction is not accepted", 500
 
@@ -851,10 +887,10 @@ def full_chain():
     :return: <dict> Containing the chain and its length.
     """
     dict_chain = []
-
+    mutex.acquire()
     for block in blockchain.chain:
         dict_chain.append(block.__dict__)  # convert Block objects to dictionaries for json export
-
+    mutex.release()
     response = {
         'chain': dict_chain,
         'length': len(blockchain.chain)

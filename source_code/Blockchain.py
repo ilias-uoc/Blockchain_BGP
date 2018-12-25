@@ -5,7 +5,8 @@ from time import time
 from urllib.parse import urlparse
 from Block import Block
 from config import state, txid_to_block, ASN_nodes, pending_transactions, as2pref, pref2as_pyt
-from config import my_assignments, node_key, AS_topo, mutex, topo_mutex, invalid_transactions
+from config import my_assignments, node_key, AS_topo, invalid_transactions
+from config import mutex, topo_mutex, asn_nodes_mutex, bc_nodes_mutex
 
 
 """
@@ -106,10 +107,12 @@ class Blockchain():
         :return: <bool> True if signature is verified, False if not.
         """
         ASN_pkey = None
+        asn_nodes_mutex.acquire()
         for asn in ASN_nodes:  # find miner's public key
             if block.miner == asn[2]:
                 ASN_pkey = asn[-1]
                 break
+        asn_nodes_mutex.release()
 
         if ASN_pkey is not None:
             block_hash = block.calculate_hash()
@@ -211,17 +214,21 @@ class Blockchain():
         :return: None
         """
         parsed_url = urlparse(address)
+        bc_nodes_mutex.acquire()
         self.nodes.add((parsed_url.scheme + "://" + parsed_url.netloc, ASN))
+        bc_nodes_mutex.release()
 
         ip_port_list = parsed_url.netloc.split(":")
         ip_addr = ip_port_list[0]
         port = int(ip_port_list[1])
 
         found_it = 0
+        asn_nodes_mutex.acquire()
         for asn in ASN_nodes:
             if ip_addr in asn and port == asn[1]:
                 found_it = 1
                 break
+        asn_nodes_mutex.release()
 
         if not found_it:
             ASN_nodes.append([ip_addr, port, ASN, None])
@@ -234,15 +241,14 @@ class Blockchain():
         """
         transaction_dict = transaction.__dict__
         transaction_type = transaction_dict['type']
-
-        neighbors = self.nodes
         transaction_data = json.dumps(transaction_dict)
         headers = {
             "Content-Type": "application/json"
         }
-
         print("Broadcasting the transaction to the rest of the network...")
 
+        bc_nodes_mutex.acquire()
+        neighbors = self.nodes
         for node in neighbors:
             try:
                 if transaction_type == "Assign":
@@ -263,6 +269,7 @@ class Blockchain():
             except:
                 print("Could not contact node {}. Moving on...".format(node[0]))
                 continue
+        bc_nodes_mutex.release()
 
     def txid_to_block_update(self):
         """

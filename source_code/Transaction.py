@@ -1,5 +1,5 @@
 import hashlib
-from config import ASN_nodes, txid_to_block, state
+from config import ASN_nodes, txid_to_block, state, asn_nodes_mutex
 from Blockchain import blockchain
 
 """
@@ -51,10 +51,12 @@ class IPAllocationTransaction():
         :return: <RSA key> The public key of the node, or None if the key is not found.
         """
         ASN_pkey = None
+        asn_nodes_mutex.acquire()
         for asn in ASN_nodes:  # find ASN public key
             if self.as_source == asn[2]:
                 ASN_pkey = asn[-1]
                 break
+        asn_nodes_mutex.release()
         return ASN_pkey
 
     def calculate_hash(self):
@@ -187,13 +189,14 @@ class AssignTransaction(IPAllocationTransaction):
         :return: <bool> True if the ASes are in the network, False otherwise.
         """
         ASes = []
+        asn_nodes_mutex.acquire()
         for i in range(len(ASN_nodes)):
             ASes.append(ASN_nodes[i][2])
+        asn_nodes_mutex.release()
 
         for AS in self.as_dest:
             if AS not in ASes:
                 return False
-
         return True
 
 

@@ -1,7 +1,7 @@
 import hashlib
 import copy
 import networkx as nx
-from config import ASN_nodes, txid_to_block, state, AS_topo, topo_mutex
+from config import ASN_nodes, state, AS_topo, topo_mutex, asn_nodes_mutex
 
 
 class BGP_Transaction():
@@ -50,10 +50,12 @@ class BGP_Transaction():
         :return: <RSA key> The public key of the node, or None if the key is not found.
         """
         ASN_pkey = None
+        asn_nodes_mutex.acquire()
         for asn in ASN_nodes:  # find ASN public key
             if self.as_source == asn[2]:
                 ASN_pkey = asn[-1]
                 break
+        asn_nodes_mutex.release()
         return ASN_pkey
 
     def calculate_hash(self):
@@ -188,8 +190,10 @@ class BGP_Announce(BGP_Transaction):
         :return: <bool> True if they are in the network, False otherwise.
         """
         ASes = ['0']
+        asn_nodes_mutex.acquire()
         for i in range(len(ASN_nodes)):
             ASes.append(ASN_nodes[i][2])
+        asn_nodes_mutex.release()
 
         for AS in self.as_dest_list:
             if AS not in ASes:

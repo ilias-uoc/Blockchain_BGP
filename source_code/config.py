@@ -35,6 +35,8 @@ assign_txids = set()
 alive_neighbors = {}  # { 'url of neighbor' : time_received }
 
 # different mutexes for some critical sections
+asn_nodes_mutex = threading.Lock()
+bc_nodes_mutex = threading.Lock()
 mutex = threading.Lock()
 pt_mutex = threading.Lock()
 bgpa_mutex = threading.Lock()
