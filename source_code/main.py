@@ -574,8 +574,7 @@ def new_bgp_announce():
     """
     values = request.get_json()
     # Check that required fields are in the posted data
-    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list', 'project', 'collector',
-                'asn_peer']
+    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
@@ -585,14 +584,10 @@ def new_bgp_announce():
     as_source = values['as_source']
     as_source_list = values['as_source_list']
     as_dest_list = values['as_dest_list']
-    project = values['project']
-    collector = values['collector']
-    asn_peer = values['asn_peer']
 
     tran_time = time()   # Transaction creation time
 
-    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, tran_time, project,
-                             collector, asn_peer)
+    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, tran_time)
 
     trans_hash = new_trans.calculate_hash()
     signature = node_key.sign(trans_hash.encode(), '')
@@ -605,6 +600,7 @@ def new_bgp_announce():
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
 
     if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
+        blockchain.update_bgp_announce(new_trans_dict['trans'])
         pending_transactions.append(new_trans_dict)  # to be mined later
 
     return 'New BGP Announce transaction created. It was also broadcasted to the network', 200
@@ -618,8 +614,7 @@ def bgp_announce_incoming():
     values = request.get_json()
 
     # Check that the required fields are in the posted data
-    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list', 'signature', 'time',
-                'project', 'collector', 'asn_peer']
+    required = ['prefix', 'bgp_timestamp', 'as_source', 'as_source_list', 'as_dest_list', 'signature', 'time']
     if not all(k in values for k in required):
         return 'Missing values', 400
 
@@ -630,13 +625,9 @@ def bgp_announce_incoming():
     as_dest_list = values['as_dest_list']
     signature = values['signature']
     time = values['time']
-    project = values['project']
-    collector = values['collector']
-    asn_peer = values['asn_peer']
 
     # Create a new transaction
-    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, time, project, collector,
-                             asn_peer)
+    new_trans = BGP_Announce(prefix, bgp_timestamp, as_source, as_source_list, as_dest_list, time)
     new_trans.sign(signature)
 
     new_trans_dict = new_trans.return_transaction()  # also validates the transaction
@@ -645,6 +636,7 @@ def bgp_announce_incoming():
 
     if new_trans_dict is not None and not check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp):
         pending_transactions.append(new_trans_dict)  # to be mined later
+        blockchain.update_bgp_announce(new_trans_dict['trans'])
         # for out of order transactions
         if tran_hash in invalid_transactions:
             invalid_transactions.remove(tran_hash)
@@ -738,7 +730,7 @@ def check_lease():
     (This is mostly for multiple assign/updates that have yet to be included in the blockchain)
     """
     pt_mutex.acquire()
-    current_update_lease = -2000
+    current_update_lease = -2000  # a very small number
     i = 0
     while i < len(pending_transactions):
         trans = pending_transactions[i]['trans']
@@ -817,7 +809,7 @@ def check_announce(as_source, prefix, as_source_list, as_dest_list, bgp_timestam
     as_source_list.sort()
     as_dest_list.sort()
     bgpa_mutex.acquire()
-    txid = '{}{}{}{}'.format(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp).encode()
+    txid = '{}{}{}{}{}'.format(as_source, prefix, as_source_list, as_dest_list, bgp_timestamp).encode()
     txid_hash = hashlib.sha256(txid).hexdigest()
     try:
         as_set = as_to_announced_txids[as_source]
@@ -887,10 +879,8 @@ def full_chain():
     :return: <dict> Containing the chain and its length.
     """
     dict_chain = []
-    mutex.acquire()
     for block in blockchain.chain:
         dict_chain.append(block.__dict__)  # convert Block objects to dictionaries for json export
-    mutex.release()
     response = {
         'chain': dict_chain,
         'length': len(blockchain.chain)
@@ -914,6 +904,8 @@ def broadcast_resolve_message():
     neighbors = blockchain.nodes
     for node in neighbors:
         try:
+            # we want async requests here.
+            # miners could slow down each other because this request is not async.
             requests.get('{}/resolve'.format(node[0]))
         except:
             print("Could not contact node {}. Moving on...".format(node[0]))

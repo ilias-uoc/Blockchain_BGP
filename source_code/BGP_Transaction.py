@@ -4,18 +4,15 @@ import networkx as nx
 from config import ASN_nodes, state, AS_topo, topo_mutex, asn_nodes_mutex
 
 
-class BGP_Transaction():
+class BGP_Transaction:
     """
     BGP_Transaction is the superclass of all the types of BGP transactions.
     """
-    def __init__(self, prefix, as_source, time, bgp_timestamp=None, project=None, collector=None, asn_peer=None):
+    def __init__(self, prefix, as_source, time, bgp_timestamp=None):
         self.prefix = prefix
         self.bgp_timestamp = bgp_timestamp
         self.as_source = as_source
         self.time = time
-        self.project = project
-        self.collector = collector
-        self.asn_peer = asn_peer
         self.type = "BGPSuperClass"
         self.signature = None
         self.__input = []
@@ -125,8 +122,8 @@ class BGP_Transaction():
 
 
 class BGP_Announce(BGP_Transaction):
-    def __init__(self, prefix, bgp_timestamp, adv_AS, source_ASes, dest_ASes, time, project, collector, asn_peer):
-        super().__init__(prefix, adv_AS, time, bgp_timestamp, project, collector, asn_peer)
+    def __init__(self, prefix, bgp_timestamp, adv_AS, source_ASes, dest_ASes, time):
+        super().__init__(prefix, adv_AS, time, bgp_timestamp)
         self.as_source_list = source_ASes
         self.as_dest_list = dest_ASes
         self.type = "BGP Announce"
@@ -138,8 +135,7 @@ class BGP_Announce(BGP_Transaction):
         :return: <bool> True if the transaction is valid, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and self.verify_origin() and not self.check_loops():
-            input = [self.prefix, self.as_source, self.as_source_list, self.as_dest_list, self.project, self.collector,
-                     self.bgp_timestamp, self.asn_peer]
+            input = [self.prefix, self.as_source, self.as_source_list, self.as_dest_list, self.bgp_timestamp]
 
             self.set_input(input)
 
@@ -244,8 +240,8 @@ class BGP_Announce(BGP_Transaction):
 
 
 class BGP_Withdraw(BGP_Transaction):
-    def __init__(self, prefix, withd_AS, time, bgp_timestamp=None, project=None, collector=None, asn_peer=None):
-        super().__init__(prefix, withd_AS, time, bgp_timestamp, project, collector, asn_peer)
+    def __init__(self, prefix, withd_AS, time, bgp_timestamp=None):
+        super().__init__(prefix, withd_AS, time, bgp_timestamp)
         self.type = "BGP Withdraw"
 
     def validate_transaction(self):
@@ -255,7 +251,7 @@ class BGP_Withdraw(BGP_Transaction):
         :return: <bool> True if the transaction is valid, False otherwise.
         """
         if self.verify_signature(self.calculate_hash()) and self.verify_path():
-            input = [self.prefix, self.as_source, self.bgp_timestamp, self.project, self.collector, self.asn_peer]
+            input = [self.prefix, self.as_source, self.bgp_timestamp]
             output = (self.prefix, self.as_source)
             self.set_input(input)
             self.set_output(output)

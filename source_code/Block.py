@@ -6,7 +6,7 @@ The Block module. Includes all the functionality for the creation of a block in 
 """
 
 
-class Block():
+class Block:
     def __init__(self, index, timestamp, transactions, previousHash):
         self.timestamp = timestamp
         self.transactions = []
@@ -43,8 +43,7 @@ class Block():
 
         :return: <str> The hash of the block.
         """
-        block_str = '{}{}{}{}'.format(self.timestamp, self.previousHash, json.dumps(self.transactions, sort_keys=True),
-                                      nonce or self.nonce).encode()
+        block_str = '{}{}{}'.format(self.timestamp, self.previousHash, nonce or self.nonce).encode()
         block_hash = hashlib.sha256(block_str).hexdigest()
         return block_hash
 

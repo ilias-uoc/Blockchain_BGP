@@ -1,4 +1,5 @@
 import networkx as nx
+from networkx.drawing.nx_agraph import to_agraph
 import csv, argparse
 from bc_requests import get_chain, get_topos, get_by_txid
 
@@ -26,6 +27,9 @@ def parse_updates(filename):
             if type == 'A':  # only parse the Announcements.
                 origin_asns = origin_as.split(",")
                 path_asns = as_path.split(",")
+                new_seq, loop = remove_prepending(path_asns)
+
+                new_seq_rev = new_seq[::-1]
                 try:
                     topo = Topos[prefix]
                 except KeyError:
@@ -34,14 +38,33 @@ def parse_updates(filename):
                     topo.add_node(prefix)
 
                 for oAS in origin_asns:
-                    # for MOAS
-                    topo.add_edge(oAS, prefix)
-                    for AS in path_asns:
-                        # ignore self announcements
-                        if AS != oAS:
-                            topo.add_edge(AS, oAS)
+                    for i in range(len(new_seq_rev) - 1):
+                        asn = new_seq_rev[i]
+                        if oAS == asn:
+                            topo.add_edge(oAS, prefix)
+                        else:
+                            topo.add_edge(asn, new_seq_rev[i-1])
+                        topo.add_edge(new_seq_rev[i+1], asn)
     finally:
         f.close()
+
+
+def remove_prepending(seq):
+    """
+    Method to remove prepending ASs from AS path.
+    """
+    last_add = None
+    new_seq = []
+    for x in seq:
+        if last_add != x:
+            last_add = x
+            new_seq.append(x)
+
+    is_loopy = False
+    if len(set(seq)) != len(new_seq):
+        is_loopy = True
+        # raise Exception('Routing Loop: {}'.format(seq))
+    return new_seq, is_loopy
 
 
 def compare_topos():
@@ -58,6 +81,7 @@ def compare_topos():
         my_topos[prefix] = []
         for edge in list(Topos[prefix].edges):
             my_topos[prefix].append([edge[0], edge[1]])
+        graph_visualization(prefix)
 
     for prefix in prefixes:
         bc_edges = bc_topos[prefix]
@@ -71,6 +95,22 @@ def compare_topos():
     return True
 
 
+def graph_visualization(prefix):
+    """
+    Creates an image of the graph of the prefix provided.
+    """
+    try:
+        graph = Topos[prefix]
+        graph.nodes[prefix].update(style='filled', fillcolor='pink')
+        A = to_agraph(graph)
+        A.layout('dot')
+        cprefix = prefix.replace('/', '+')
+        A.draw('correctness_graph_for_' + cprefix + '.png')
+        print('Check your folder for a pic of the graph')
+    except KeyError:
+        print('The prefix does not exists')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-f', '--file', default='../bgpstream/forth_25_7_2018_9_to_10_am/P_139.91.0.0+16-S' +
@@ -78,7 +118,7 @@ def main():
                         type=str, help='file with bgpstream updates')
     args = parser.parse_args()
     parse_updates(args.file)
-    print(compare_topos())
+    print("Topologies correct:", compare_topos())
 
 
 if __name__ == '__main__':

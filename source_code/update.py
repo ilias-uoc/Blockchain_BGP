@@ -7,7 +7,7 @@ headers = {
 update_5000 = {
     "as_source": '13335',
     "assign_tran": '--txid goes here--',
-    "new_lease": 100
+    "new_lease": 4
 }
 
 update_5000_data = json.dumps(update_5000)

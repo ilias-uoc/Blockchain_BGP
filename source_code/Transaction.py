@@ -7,7 +7,7 @@ The IP Allocation Transaction module. Includes all the functionality for the IP 
 """
 
 
-class IPAllocationTransaction():
+class IPAllocationTransaction:
     """
     IPAllocationTransaction is the superclass of all the IP Address Allocation type of transactions
     """
@@ -132,7 +132,7 @@ class AssignTransaction(IPAllocationTransaction):
         self.as_dest = as_dest
         self.leaseDuration = leaseDuration
         self.transferTag = transferTag  # can the ASes in the AS destination list further transfer the prefix?
-        self.last_assign = self.txid
+        self.last_assign = txid
         self.source_lease = source_lease
         self.type = "Assign"
 
@@ -203,7 +203,7 @@ class AssignTransaction(IPAllocationTransaction):
 class RevokeTransaction(IPAllocationTransaction):
     def __init__(self, as_source, txid, time):
         super().__init__(as_source, txid, time)
-        self.assign_tran_id = self.txid
+        self.assign_tran_id = txid
         self.assign_tran = self.get_assign_tran()
         self.type = "Revoke"
 
@@ -244,7 +244,7 @@ class RevokeTransaction(IPAllocationTransaction):
 
     def get_assign_tran(self):
         """
-        Finds the assign transaction from the blockchain with the txid that was given
+        Finds the Assign transaction from the blockchain with the txid that was given
         when creating this Revoke transaction.
 
         :return: <dict> The Assign transaction if found, None otherwise.
@@ -340,11 +340,21 @@ class UpdateTransaction(IPAllocationTransaction):
             prefix = self.assign_tran['trans']['input'][0]
             as_source = self.assign_tran['trans']['input'][1]
             as_dest = self.assign_tran['trans']['input'][2]
-            as_source_source_lease = self.assign_tran['trans']['input'][3]
+            as_source_original_lease = self.assign_tran['trans']['input'][3]
             current_lease = 2000  # doesn't matter
 
+            if self.new_lease > as_source_original_lease:
+                # the AS cannot update with the given lease period,
+                # it exceeds it's own lease.
+                return False
+
+            if not self.can_update(as_source_original_lease):
+                # the AS source has already used all of its lease period to update
+                # multiple other leases in the chain.
+                return False
+
             if self.as_source == as_source:
-                # find if all ASes in the transaction are currently the owners of the prefix(from state)
+                # find if all ASes in the transaction are currently the owners of the prefix (from state)
                 for ASN in as_dest:
                     found = 0
                     for tuple in state[prefix]:
@@ -355,10 +365,11 @@ class UpdateTransaction(IPAllocationTransaction):
                     if found == 0:
                         return False  # an AS was not found so the transaction is not valid
 
-            if current_lease >= self.new_lease or self.new_lease > as_source_source_lease \
-                    or not self.can_update(as_source_source_lease):
-                return False
-            return True
+                    if current_lease > self.new_lease:
+                        # the new lease should be greater or equal
+                        # than the current lease.
+                        return False
+                return True
         return False
 
     def lease_expired(self):

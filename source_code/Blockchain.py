@@ -14,7 +14,7 @@ The Blockchain module. Includes all the functionality for the blockchain
 """
 
 
-class Blockchain():
+class Blockchain:
     def __init__(self):
         self.chain = []
         self.nodes = set()
@@ -294,7 +294,8 @@ class Blockchain():
                     if transaction['type'] == "Assign":
                         self.update_assign(transaction)
                         if transaction['txid'] in my_assignments:
-                            self.check_revoke(transaction)
+                            pass
+                            # self.check_revoke(transaction)
 
                     elif transaction['type'] == "Revoke":
                         self.update_revoke(transaction)
@@ -319,7 +320,7 @@ class Blockchain():
         asn_list = transaction['input'][2]
         ld = transaction['input'][4]
         tt = transaction['input'][5]
-        last_assign = transaction['input'][-1]
+        last_assign = transaction['txid']
 
         found = 0
         for asn in asn_list:
@@ -493,6 +494,7 @@ class Blockchain():
         edges_to_source = set()
         edges_to_prefix = set()
         my_nodes = set()
+        redundant_nodes = set()
 
         # find all the edges from all the paths that lead to the source AS
         for node in topo.nodes:
@@ -510,6 +512,13 @@ class Blockchain():
 
         diff = edges_to_source.difference(edges_to_prefix)
         topo.remove_edges_from(diff)  # remove the edges that can't reach the prefix.
+
+        # find all the other nodes that cannot reach the prefix.
+        for node in topo.nodes:
+            paths = nx.all_simple_paths(topo, node, prefix)
+            if len(list(paths)) == 0 and node != prefix:
+                redundant_nodes.add(node)  # these nodes cannot reach the prefix.
+        topo.remove_nodes_from(redundant_nodes)
 
     def find_by_txid(self, txid):
         """
