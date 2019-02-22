@@ -978,6 +978,7 @@ def mine():
 
         print("Mining...")
         block.proof_of_work()
+        block.mined_timestamp = time()
 
         block_hash = block.calculate_hash()
         signature = node_key.sign(block_hash.encode(), '')

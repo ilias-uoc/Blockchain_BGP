@@ -1,17 +1,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
+import json
 from bc_requests import get_chain
+from argparse import ArgumentParser
+from pprint import  pprint
 
-
-def get_time_diff():
+def get_time_diff(filename):
     """
     Finds and returns all the (block timestamp - transaction timestamp) differences in the chain.
 
     :return: A list with all the time differences in the chain,
              A dict with the diffs per block (key: block #, val: a list with the time diffs of that block)
     """
-    chain_len = get_chain()
+    if filename is None:
+        # get chain from the network
+        chain_len = get_chain()
+    else:
+        with open(filename) as f:
+            chain_len = json.load(f)
+        f.close()
     chain = chain_len['chain']
     length = chain_len['length']
     time_diffs_list = []
@@ -20,10 +28,11 @@ def get_time_diff():
     for i in range(length):
         per_block_time_diffs = []
         block = chain[i]
-        block_time = block['timestamp']
+        block_time = block['mined_timestamp']
         for tran in block['transactions']:
             if i == 0:
-                tran_time = tran['timestamp']
+                # don't care about Genesis
+                continue
             else:
                 tran_time = tran['trans']['timestamp']
             time_diff = block_time - tran_time
@@ -54,7 +63,9 @@ def plot_cdf(results):
     ax.grid(True, which='both')
     ax.xaxis.grid(linestyle=':')
     ax.yaxis.grid(linestyle=':')
-
+    plt.xlabel("Time [seconds]")
+    plt.ylabel("CDF")
+    print("Median: ", np.median(cdf.x))
     plt.savefig("cdf.png")
     plt.close()
 
@@ -73,11 +84,17 @@ def set_y_axes(cdf, x):
     return y
 
 
-def main():
-    all_diffs, per_block_diffs = get_time_diff()
+def main(filename):
+    all_diffs, per_block_diffs = get_time_diff(filename)
     # block index: time differences of all the transactions in this block
+    pprint(per_block_diffs)
+    print("Average: ", sum(all_diffs)/len(all_diffs))
     plot_cdf(all_diffs)
 
 
 if __name__ == '__main__':
-    main()
+    parser = ArgumentParser()
+    parser.add_argument('-f', '--file', default=None, help='JSON file that contains a chain')
+    args = parser.parse_args()
+    filename = args.file
+    main(filename)

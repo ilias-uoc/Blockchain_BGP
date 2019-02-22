@@ -194,12 +194,14 @@ class Blockchain:
             hash = block['hash']
             miner = block['miner']
             signature = block['signature']
+            mined_timestamp = block['mined_timestamp']
 
             new_block = Block(index, timestamp, transactions, previousHash)
             new_block.hash = hash
             new_block.nonce = nonce
             new_block.miner = miner
             new_block.signature = signature
+            new_block.mined_timestamp = mined_timestamp
 
             bc.append(new_block)
         return bc

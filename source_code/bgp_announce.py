@@ -24,6 +24,12 @@ def parse_bgpstream(filename):
                 break
             if type == 'A':  # make the Announcements.
                 make_announce_transaction(row)
+                # request to mine the new transactions
+                # now I know that the same number of transactions are included in every block.
+                # print("Mining started...")
+                # requests.get("http://localhost:5000/mine")
+                # print("Mining finished...")
+                # uncomment if necessary
             elif type == 'W':
                 # future work
                 pass

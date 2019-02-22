@@ -17,6 +17,7 @@ class Block:
         self.hash = self.calculate_hash()
         self.signature = None
         self.miner = None
+        self.mined_timestamp = None
 
     def proof_of_work(self):
         """

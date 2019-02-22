@@ -115,8 +115,7 @@ First start the network by running `$ python3 start_network.py`
 
     Mine a new block `$ python3 parallel_mine.py`
 
-## Other scripts and what they do
-
+## Misc. scripts
 
 
 ## License
