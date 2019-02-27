@@ -19,7 +19,7 @@ from BGP_Transaction import BGP_Announce, BGP_Withdraw
 from Block import Block
 
 """
-The main functionality is here.
+Main script.
 """
 
 app = Flask(__name__)

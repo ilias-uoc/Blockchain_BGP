@@ -6,6 +6,7 @@ from bc_requests import get_chain
 from argparse import ArgumentParser
 from pprint import  pprint
 
+
 def get_time_diff(filename):
     """
     Finds and returns all the (block timestamp - transaction timestamp) differences in the chain.

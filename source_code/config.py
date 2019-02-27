@@ -1,5 +1,7 @@
 import threading
 import csv
+import sys
+sys.path.append('../caida_utils')
 from parse_utils import get_as_prefs
 from Crypto.PublicKey import RSA
 from Crypto import Random

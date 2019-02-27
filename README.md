@@ -1,7 +1,7 @@
 ![Python Version](https://img.shields.io/badge/Python-3-blue.svg)
 # Blockchain_BGP
-Design, implementation and evaluation of a blockchain-based prototype framework
-for the management of BGP advertisements.
+A blockchain-based prototype framework for the management
+of IP prefix allocations and BGP updates.
 
 ## Installation
 
@@ -19,7 +19,7 @@ for the management of BGP advertisements.
 * *Starting the network*
     `$ python3 start_network.py`
     Starts the main script on all the bootstrap nodes of the
-    network that are in the bgp_network.csv file.
+    network that are found in the bgp_network.csv file.
 
 * *Adding new nodes to the network*
     `$ python3 new_nodes.py -f path_to_bgpstream_file`
@@ -48,8 +48,8 @@ for the management of BGP advertisements.
 
 * *Mining a new block*
     To mine a new block run:
-    `$ python3 parallel_mine.py`
-    and enter the number of miners you want.
+    `$ python3 bootstrap_mine.py`
+    and enter the number of bootstrap nodes that will mine the block.
 
 * *Finally*
     `$ killall python3`
@@ -74,7 +74,7 @@ First start the network by running `$ python3 start_network.py`
     * "last_assign": -1
 
     Run `$ python3 assign.py` after you've updated the file with the above values.
-    Mine a new block that contains this transaction `$ python3 parallel_mine.py` and enter the amount of miners
+    Mine a new block that contains this transaction `$ python3 bootstrap_mine.py` and enter the amount of miners
 
 2. **IP Update**
     AS 13335 updates the lease for the ASes 133741 and 133948 from the previous Assign transaction from 2 to 4 months
@@ -85,7 +85,7 @@ First start the network by running `$ python3 start_network.py`
     * "new_lease": 4
 
     Run `$ python3 update.py` after you've updated the file with the above values.
-    Mine a new block that contains this transaction `$ python3 parallel_mine.py` and enter the amount of miners
+    Mine a new block that contains this transaction `$ python3 bootstrap_mine.py` and enter the amount of miners
 
 3. **IP Revoke**
     After 4 months AS 13335 can get the prefix back.
@@ -95,7 +95,7 @@ First start the network by running `$ python3 start_network.py`
     * "assign_tran": 'transaction id of the Assign transaction'
 
     Run `$ python3 revoke.py` after you've updated the file with the above values.
-    Mine a new block that contains this transaction `$ python3 parallel_mine.py` and enter the amount of miners.
+    Mine a new block that contains this transaction `$ python3 bootstrap_mine.py` and enter the amount of miners.
 
     *Keep in mind that there is an algorith that frequently checks for when a lease expires and automatically
     makes a new Revoke transaction.*
@@ -104,7 +104,7 @@ First start the network by running `$ python3 start_network.py`
     First run `$ python3 new_nodes.py`.
     After that, run `$ python3 bgp_announce.py` to replay the file P_139.91.0.0+16-S_1532509200-E_1532512800
     as BGP Announce transactions
-    Mine a new block `$ python3 parallel_mine.py`
+    Mine a new block `$ python3 bootstrap_mine.py`
 
 5. **BGP Withdraw**
     Make a HTTP POST Request to http://node_ip:node_port/transactions/bgp_withdraw/new with the parameters. You can
@@ -113,9 +113,21 @@ First start the network by running `$ python3 start_network.py`
     * "prefix": "139.91.0.0/16",
     * "as_source": "8522"
 
-    Mine a new block `$ python3 parallel_mine.py`
+    Mine a new block `$ python3 bootstrap_mine.py`
 
 ## Misc. scripts
+*   **bc_requests.py**
+    Provides several functions that fetch data from the blockchain.
 
+*   **calc_mining_time.py**
+    Calculates the time it took for a block to be mined.
+
+*   **plot_tran_timediff_cdf.py**
+    Plots the cdf of the time difference between the creation of the transactions and the time they were mined.
+
+*   **topo_correctness.py**
+    Compares the topologies from parsed data with the ones generated from the network
 
 ## License
+
+BSD 3-Clause License

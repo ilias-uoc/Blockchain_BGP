@@ -58,7 +58,7 @@ def get_siblings_asns_orgs(input_file = "../CAIDA-asorg2info/20170401.as-org2inf
     return (siblings, orgs, asns)
 
 
-def get_as_prefs(input_file = "./routeviews-rv2-20170312-1200.pfx2as"):
+def get_as_prefs(input_file = "../caida_pref2as_datasets/my_routeviews-rv2-20180328-0000.pfx2as"):
     as2pref     = {}
     pref2as_pyt = pytricia.PyTricia()
 

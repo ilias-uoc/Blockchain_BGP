@@ -1,5 +1,7 @@
 import requests, threading
 
+# Starts some bootstrap nodes to mine
+
 
 def mine(i):
     print(threading.current_thread().getName() + ":  Node " + str(i) + " started")
